@@ -25,9 +25,11 @@ class Args(argparse.Namespace):
     subparser: str | None
     sums: list[int]
     num_digits: list[int]
-    options: list[int]
+    digit_set: list[int]
     include_digits: list[int]
     exclude_digits: list[int]
+    num_odd: int | None
+    num_even: int | None
 
 
 Alternatives = Iterable[list[SudokuSet[int]]]
@@ -52,7 +54,7 @@ def main(raw_args: list[str] | None = None) -> Alternatives:
     parser.add_argument("-n", "--num-digits", type=int, nargs="*", metavar="NUM",
                         action="extend",
                         help="number of digits to match (DEFAULT: %(default)s)")
-    parser.add_argument("-o", "--options", type=int, nargs="*", metavar="DIGIT",
+    parser.add_argument("--digit-set", type=int, nargs="*", metavar="DIGIT",
                         default=[1, 2, 3, 4, 5, 6, 7, 8, 9],
                         help="starting options (DEFAULT: %(default)s)")
     parser.add_argument("-i", "--include-digits", type=int, nargs="*", metavar="DIGIT",
@@ -61,6 +63,10 @@ def main(raw_args: list[str] | None = None) -> Alternatives:
     parser.add_argument("-x", "--exclude-digits", type=int, nargs="*", metavar="DIGIT",
                         action="extend", default=[],
                         help="digits the must be excluded (DEFAULT: %(default)s)")
+    parser.add_argument("-o", "--num-odd", type=int, metavar="NUM",
+                        help="the minimum number of odd number to match")
+    parser.add_argument("-e", "--num-even", type=int, metavar="NUM",
+                        help="the minimum number of even number to match")
 
     parser.add_argument("--", dest="bork", choices=operators.keys(), nargs="*",
                         default=argparse.SUPPRESS,
@@ -72,7 +78,7 @@ def main(raw_args: list[str] | None = None) -> Alternatives:
     rest: list[str]
     args, rest = parser.parse_known_args(raw_args, namespace=Args())
 
-    options = set(args.options).difference(args.exclude_digits)
+    options = set(args.digit_set).difference(args.exclude_digits)
 
     sums: defaultdict[int, set[SudokuSet[int]]] = defaultdict(set)
 
@@ -89,7 +95,14 @@ def main(raw_args: list[str] | None = None) -> Alternatives:
         n = args.num_digits
         alternatives = (x for x in alternatives if len(x) in n)
 
-    alternatives = ([x] for x in alternatives if x.issuperset(args.include_digits))
+    alternatives = (x for x in alternatives if x.issuperset(args.include_digits))
+    if args.num_even:
+        alternatives = (x for x in alternatives if sum(map(lambda y: y % 2 == 0, x)) >= args.num_even)
+
+    if args.num_odd:
+        alternatives = (x for x in alternatives if sum(map(lambda y: y % 2 == 1, x)) >= args.num_odd)
+
+    alternatives = ([x] for x in alternatives)
 
     if rest:
         if (sep := rest.pop(0)) != "--":
@@ -108,6 +121,7 @@ def main(raw_args: list[str] | None = None) -> Alternatives:
     alternatives = sorted((sum(chain(*a)), a) for a in alternatives)
     sum_padding = len(str(max((x for x, _ in alternatives), default=0)))
 
+    print("")
     for s, a in alternatives:
         print(f"  𝚺{s:{sum_padding}} = {' '.join(map(str, a))}")
 

@@ -10,7 +10,7 @@ import itertools
 from itertools import chain, combinations, repeat, count, zip_longest
 from pprint import pp
 import operator
-from operator import itemgetter
+from operator import itemgetter, methodcaller
 import re
 from textwrap import dedent, indent
 from typing import Callable, Iterable, Literal, get_args
@@ -131,20 +131,13 @@ def permute(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     return zip(*chain.from_iterable(x[1] for x in sorted(ret.items())))
 
 
-def overlap(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
-    """\
-    mark columns as sets by index and number and filter if they don't overlap
-
-    ex. 3 columns. ... -- OVER -m 101  will filter rows where the set of the
-    1st and 3rd column doesn't have an overlap with the 2nd
-    """
-    rows = merge(a, b)
-    num_sets = list(range(len(rows[0])))
-    if not args.mask:
+def create_index_masks(args_mask, length):
+    num_sets = list(range(length))
+    if not args_mask:
         mask = (num_sets[:-1], num_sets[-1:])
     else:
         mask_dict = defaultdict(list)
-        for val in chain.from_iterable(m[1] for m in chain(args.mask)):
+        for val in chain.from_iterable(m[1] for m in chain(args_mask)):
             try:
                 idx = num_sets.pop(0)
             except IndexError:
@@ -152,12 +145,51 @@ def overlap(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
             mask_dict[val].append(idx)
         mask = (*mask_dict.values(), num_sets)
     mask = list(filter(lambda x: x, mask))
+    return mask
 
-    def sets_overlap(s):
-        sets = list((reduce(operator.or_, (s[i] for i in m)) for m in mask))  # union
-        return not not list(reduce(operator.and_, sets))  # intersection
+
+def build_sets_from_index_mask(masks, row):
+    return list((reduce(operator.or_, (row[i] for i in m)) for m in masks))  # union
+
+
+def methodoperator(name):
+    def caller(lhs, rhs):
+        return methodcaller(name, rhs)(lhs)
+    return caller
+
+
+def overlap(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
+    """\
+    mark columns as sets by index and number and filter if they don't overlap
+
+    ex. 3 columns. ... -- OVER -m 101  will filter rows where the set of the
+    1st and 3rd column doesn't have an overlap with the 2nd
+    """
+    rows = list(merge(a, b))
+    masks = create_index_masks(args.mask, len(rows[0]))
+
+    def sets_overlap(row):
+        sets = build_sets_from_index_mask(masks, row)
+        return bool(reduce(methodoperator("intersection"), sets))
 
     return (x for x in rows if sets_overlap(x))
+
+
+def add(a: Alternatives, b: Alternatives) -> Alternatives:
+    """just add a column"""
+    return merge(a, b)
+
+
+def diff(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
+    """keep only disjoint sets from mask"""
+    rows = list(merge(a, b))
+    masks = create_index_masks(args.mask, len(rows[0]))
+
+    def sets_disjoint(row):
+        sets = build_sets_from_index_mask(masks, row)
+        return bool(reduce(methodoperator("isdisjoint"), sets))
+
+    return (x for x in rows if sets_disjoint(x))
 
 
 operators: dict[str, Callable[[Alternatives, Alternatives], Alternatives]] = {
@@ -166,6 +198,8 @@ operators: dict[str, Callable[[Alternatives, Alternatives], Alternatives]] = {
     "DROP": drop,
     "OVER": overlap,
     "PER": permute,
+    "ADD": add,
+    "DIFF": diff,
 }
 
 

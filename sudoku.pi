@@ -2,15 +2,20 @@ import cp,util.
 
 sudoku(Board) =>
     Board :: 0..9,
+    % all rows unique digits
     foreach(Row in Board)
         all_different(Row)
     end,
+    % all columns unique digits
     foreach(Column in transpose(Board))
         all_different(Column)
     end,
+    % all boxes unique digits
     foreach(I in 1..3..9, J in 1..3..9)
         all_different([Board[I+K,J+L] : K in 0..2, L in 0..2])
     end,
+    % exactly 5 zeros in the grid
+    count(0, Board.vars()) #= 5,
     solve(Board),
     foreach (Row in Board)
         println(Row)

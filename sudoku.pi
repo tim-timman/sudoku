@@ -1,27 +1,25 @@
-import cp.
+import cp,util.
 
-sudoku(A) =>
-    N=len(A),
-    A :: 1..N,
-    foreach(Row in 1..N)
-        all_different(A[Row])
+sudoku(Board) =>
+    Board :: 0..9,
+    foreach(Row in Board)
+        all_different(Row)
     end,
-    foreach(Col in 1..N)
-        all_different([A[Row,Col] : Row in 1..N])
+    foreach(Column in transpose(Board))
+        all_different(Column)
     end,
-    M=floor(sqrt(N)),
-    foreach(Row in 1..M, Col in 1..M)
-        Square = [A[Row1,Col1] :
-                    Row1 in (Row-1)*M+1..Row*M,
-                    Col1 in (Col-1)*M+1..Col*M],
-        all_different(Square)
+    foreach(I in 1..3..9, J in 1..3..9)
+        all_different([Board[I+K,J+L] : K in 0..2, L in 0..2])
     end,
-    solve(A),
-    print(.).
+    solve(Board),
+    foreach (Row in Board)
+        println(Row)
+    end,
+    nl.
 
 
-board(A) =>
-    A = {{_,_,_,_,_,_,_,_,_},
+board(X) =>
+    X = {{_,_,_,_,_,_,_,_,_},
          {_,_,_,_,_,_,_,_,_},
          {_,_,_,_,_,_,_,_,_},
          {_,_,_,_,_,_,_,_,_},
@@ -31,4 +29,4 @@ board(A) =>
          {_,_,_,_,_,_,_,_,_},
          {_,_,_,_,_,_,_,_,_}}.
 
-main => board(A), print(count_all(sudoku(A))).
+main => board(Board), print(count_all(sudoku(Board))).

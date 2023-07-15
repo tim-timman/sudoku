@@ -1,0 +1,283 @@
+/* 
+
+  Miracle Sudoku in Picat.
+
+  From  Cracking The Cryptic "The Miracle Sudoku"
+  https://www.youtube.com/watch?v=yKf9aUIxdb4&feature=emb_title&fbclid=IwAR2vYHgWUncgTpe1NjoNuAM9pv1RhTd5Dv9cLfm3snM1iGaagMrmr6M5Gc8
+  """
+  - Normal Sudoku rules apply. 
+  - Any two cells separated by a knight's move or a king's move (in chess)
+    cannot contain the same digit.
+  - Any two orthogonally adjacent cells cannot contain consecutive digits.
+  """
+
+  Slate wrote about this:
+  "I Really Can’t Overstate How Riveting This Video of a Guy Solving a Sudoku Is - Just dynamite entertainment.":
+  https://slate.com/human-interest/2020/05/the-miracle-sudoku-is-an-absolutely-riveting-video.html?via=section_features
+
+
+  The Puzzle was created by Mitchell Lee.
+
+  The problem instance is
+   [[_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, 1,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  2, _, _],
+    
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _]].
+
+
+  And it has actually a unique solution!
+
+   [4,8,3, 7,2,6, 1,5,9]
+   [7,2,6, 1,5,9, 4,8,3]
+   [1,5,9, 4,8,3, 7,2,6]
+
+   [8,3,7, 2,6,1, 5,9,4]
+   [2,6,1, 5,9,4, 8,3,7]
+   [5,9,4, 8,3,7, 2,6,1]
+
+   [3,7,2, 6,1,5, 9,4,8]
+   [6,1,5, 9,4,8, 3,7,2]
+   [9,4,8, 3,7,2, 6,1,5]
+
+
+ There is a lot of "symmetries" (invariants) in this solution:
+  - search for the pattern <4,8,3,7> and <2,6,1,5>
+   (or 
+   [<4, 8, 3,7>, 2,<6, 1,5>, 9]
+   [ 7,<2, 6, 1,5>, 9, 4, 8, 3]
+   [ 1, 5, 9,<4, 8, 3,7>, 2, 6]
+   [ 8, 3, 7,<2, 6, 1,5>, 9, 4]
+   [ 2, 6, 1, 5, 9,<4, 8, 3,7>]
+   [ 5, 9,<4, 8, 3, 7>,2, 6, 1]
+   [ 3, 7,<2, 6, 1,5>, 9, 4, 8]
+   [ 6, 1, 5, 9,<4, 8, 3,7>, 2]
+   [ 9,<4, 8, 3,7>,<2, 6, 1,5>]
+
+
+ We see this more clearly if we sort the lines we see that all
+ the solumns are in circular rotations of 1..9,
+ and the rows are rotations of 1,5,9,4,8,3,7,2,6 
+ [NOTE: these are sorted lines]
+   [1,5,9, 4,8,3, 7,2,6]
+   [2,6,1, 5,9,4, 8,3,7]
+   [3,7,2, 6,1,5, 9,4,8]
+   [4,8,3, 7,2,6, 1,5,9]
+   [5,9,4, 8,3,7, 2,6,1]
+   [6,1,5, 9,4,8, 3,7,2]
+   [7,2,6, 1,5,9, 4,8,3]
+   [8,3,7, 2,6,1, 5,9,4]
+   [9,4,8, 3,7,2, 6,1,5]
+
+
+
+ Here's the solution to "A New Miracle Sudoku" created by Aad van de Wetering
+ (with hints 3 and 4) is show in https://www.youtube.com/watch?v=Tv-48b-KuxI
+ 
+
+  [9,4,8, 3,7,2, 6,1,5]
+  [3,7,2, 6,1,5, 9,4,8]
+  [6,1,5, 9,4,8, 3,7,2]
+
+  [4,8,3, 7,2,6, 1,5,9]
+  [7,2,6, 1,5,9, 4,8,3]
+  [1,5,9, 4,8,3, 7,2,6]
+
+  [8,3,7, 2,6,1, 5,9,4]
+  [2,6,1, 5,9,4, 8,3,7]
+  [5,9,4, 8,3,7, 2,6,1]
+
+  Analysis: What I can see, this solution is a variant of the 
+            first instance where the 9 boxes are shuffled.
+  
+  Here are the boxes of original problem :
+    A B C 
+
+    D E F
+
+    G H I
+
+  The second problem instance has the following box configuration:
+   
+   I G H
+ 
+   A B C
+
+   D E F
+
+  For number of unique solutions, see go6/0 (and go7/0) below.
+
+
+  For some more analysis of the symmetries of the 9 "base" instances found 
+  in go6/0, see http://hakank.org/picat/miracle_sudoku_analyse.pi
+
+
+  Also, see:
+  * Solving the Miracle Sudoku in Prolog
+    https://benjamincongdon.me/blog/2020/05/23/Solving-the-Miracle-Sudoku-in-Prolog/
+  * Hacker News discussions on the above blog post
+    https://news.ycombinator.com/item?id=23302102#23309776
+    https://news.ycombinator.com/item?id=23293454
+
+
+
+  This Picat model was created by Hakan Kjellerstrand, hakank@gmail.com
+  See also my Picat page: http://www.hakank.org/picat/
+
+*/
+
+import cp,util.
+
+
+main => go.
+
+go ?=>
+  problem(0,X),
+  miracle_sudoku(X),
+  foreach(Row in X)
+    println(Row)
+  end,
+  nl,
+  
+  fail,
+  nl.
+
+go => true.
+
+%
+% Solve Miracle Sudoku
+%
+miracle_sudoku(X) =>
+   N = 9,
+   N3 = 3,
+
+   Vars = X.vars(),
+   Vars :: 1..N,
+
+   % Sudoku
+   foreach(Row in X)
+     all_different(Row)
+   end,
+   foreach(Column in transpose(X))
+     all_different(Column)
+   end,
+   
+   foreach(I in 1..N3..N, J in 1..N3..N)
+     all_different([X[I+K,J+L] : K in 0..N3-1, L in 0..N3-1])
+   end,
+
+   % Knight move: must be different
+   foreach(I in 1..N, J in 1..N, A in -2..2, B in -2..2,
+      member(I+A,1..N), member(J+B,1..N), abs(A)+abs(B)==3)
+      X[I,J] #!= X[I+A,J+B]
+   end,
+
+   % Kings move: must be different
+   foreach(I in 1..N, J in 1..N, A in -1..1, B in -1..1,
+      member(I+A,1..N), member(J+B,1..N), (A != 0 ; B != 0))
+      X[I,J] #!= X[I+A,J+B]
+   end,
+
+   % Orthogonally adjacent (i.e. same row, same column): cannot contain consecutive digits
+   foreach(I in 1..N)
+     foreach(J in 2..N)
+       abs(X[I,J-1]-X[I,J]) #> 1,
+       abs(X[J-1,I]-X[J,I]) #> 1       
+     end
+   end,
+
+   solve([ffd,down], Vars).
+
+%
+% Rotate a matrix (non cp form)
+%
+rotate_matrix(X) = Rot.array_matrix_to_list_matrix() =>
+  N = X.len,
+  Rot = new_array(N,N),
+  foreach(I in 1..N)
+    foreach(J in 1..N)
+      Rot[I,J] := X[N-J+1,I]
+    end
+  end.
+
+%
+% Flip a matrix upside down
+%
+flip_matrix(X) = F =>
+  N = X.len,
+  F = [],
+  foreach(I in N..-1..1)
+    F := F ++ [[X[I,J] : J in 1..N]]
+  end.
+
+%
+% Check symmetries for a Sudoku instance X
+%
+check_symmetries(X) =>
+  Sols = new_map(),
+  Sym = new_map(),
+  % Get all solutions
+  All = find_all(X,miracle_sudoku(X)),
+  foreach(S in All)
+    % Check if we have seen these before
+    if not Sym.has_key(S) then
+      Sols.put(S,1)
+    end,
+    T = S.transpose(),
+    Sym.put(T,1),
+    Rot1 = rotate_matrix(S),
+    Rot2 = rotate_matrix(Rot1),
+    Rot3 = rotate_matrix(Rot2),    
+    Rot4 = rotate_matrix(T),
+    Rot5 = rotate_matrix(Rot4),
+    Rot6 = rotate_matrix(Rot5),    
+    Flip1 = flip_matrix(S),
+    Rot7 = rotate_matrix(Flip1),
+    Rot8 = rotate_matrix(Rot7),
+    Rot9 = rotate_matrix(Rot8),
+    Flip2 = flip_matrix(T),
+    Rot10 = rotate_matrix(Flip2),
+    Rot11 = rotate_matrix(Rot10),
+    Rot12 = rotate_matrix(Rot11),
+    
+    foreach(Rot in [S,T,Rot1,Rot2,Rot3,Rot4,Rot5,Rot6,
+                    Flip1,Flip2,Rot7,Rot8,Rot9,Rot10,Rot11,Rot12])
+      Sym.put(Rot,1)
+    end
+  end,
+
+  % println(sols=Sols),
+  C := 1,
+  foreach(S=1 in Sols)
+    printf("%d\n", C),
+    C := C + 1,
+    foreach(Row in S)
+      println(Row)
+    end,
+    nl
+  end,
+  println(numSols=Sols.keys.len),
+  nl.
+
+
+
+% No hints
+problem(0,X) =>
+  X =
+   [[_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _],
+    [_, _, _,  _, _, _,  _, _, _]].

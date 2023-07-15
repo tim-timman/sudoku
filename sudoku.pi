@@ -2,25 +2,31 @@ import cp,util.
 
 sudoku(Board) =>
     Board :: 0..9,
-    % all rows unique digits
-    foreach(Row in Board)
-        all_different(Row)
+    TBoard = transpose(Board),
+    foreach(I in 1..9)
+        Row = Board[I],
+        % all rows unique digits
+        all_different(Row),
+
+        Column = TBoard[I],
+        % all columns unique digits
+        all_different(Column),
+
+        % diagonals can't contain 0s
+        Board[I,I] #!= 0,
     end,
-    % all columns unique digits
-    foreach(Column in transpose(Board))
-        all_different(Column)
+    foreach(I in 1..9, J in 1..9)
+        X = 45 - sum(Row.vars()),
+        Y = 45 - sum(Column.vars()),
+        Board[I,J] #= 0 #=> Board[X,Y] #= 0
     end,
     % all boxes unique digits
     foreach(I in 1..3..9, J in 1..3..9)
         all_different([Board[I+K,J+L] : K in 0..2, L in 0..2])
     end,
     % exactly 5 zeros in the grid
-    count(0, Board.vars()) #= 5,
-    solve(Board),
-    foreach (Row in Board)
-        println(Row)
-    end,
-    nl.
+    exactly(5, Board.vars(), 0),
+    solve([ffd, down], Board).
 
 
 board(X) =>
@@ -34,4 +40,13 @@ board(X) =>
          {_,_,_,_,_,_,_,_,_},
          {_,_,_,_,_,_,_,_,_}}.
 
-main => board(Board), print(count_all(sudoku(Board))).
+main ?=>
+    board(Board),
+    sudoku(Board),
+    foreach (Row in Board)
+        println(Row)
+    end,
+    nl,
+
+    fail,
+    nl.

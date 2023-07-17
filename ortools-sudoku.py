@@ -45,36 +45,6 @@ def main(board=None):
                           for i in range(size)])
     grid_vars_t = grid_vars.transpose(1, 0, 2)
 
-    # vars to be able to constrain the value of a row/column
-    missing_row_vals = [model.NewIntVar(0, digits, f"not_in_r{i+1}") for i in range(size)]
-    missing_col_vals = [model.NewIntVar(0, digits, f"not_in_c{i+1}") for i in range(size)]
-
-    for i in range(size):
-        row_var = missing_row_vals[i]
-        col_var = missing_col_vals[i]
-        model.Add(row_var == 45 - sum(sum(grid_vars[i, :, k]) * k for k in range(digits)))
-        model.Add(col_var == 45 - sum(sum(grid_vars_t[i, :, k]) * k for k in range(digits)))
-
-    missing_row_bools = np.array([[model.NewBoolVar(f"r{i+1}={k}")
-                                   for k in range(digits)]
-                                  for i in range(size)])
-    missing_col_bools = np.array([[model.NewBoolVar(f"c{i + 1}={k}")
-                                   for k in range(digits)]
-                                  for i in range(size)])
-
-    for i, k in np.ndindex(size, digits):
-        row_bool = missing_row_bools[i, k]
-        model.Add(missing_row_vals[i] == k).OnlyEnforceIf(row_bool)
-        model.Add(missing_row_vals[i] != k).OnlyEnforceIf(row_bool.Not())
-
-        col_bool = missing_col_bools[i, k]
-        model.Add(missing_col_vals[i] == k).OnlyEnforceIf(col_bool)
-        model.Add(missing_col_vals[i] != k).OnlyEnforceIf(col_bool.Not())
-
-    for i in range(size):
-        model.Add(sum(missing_row_bools[i]) == 1)
-        model.Add(sum(missing_col_bools[i]) == 1)
-
     # Cells may only contain one of the digits
     for i, j in np.ndindex(size, size):
         model.AddExactlyOne(grid_vars[i, j])
@@ -95,15 +65,35 @@ def main(board=None):
     # exactly 5 zeros in the grid
     model.Add(sum(grid_vars[:, :, 0].flat) == 5)
 
+    # the zeroes may not be on the positive diagonal
+    for i in range(size):
+        model.Add(grid_vars[i, i, 0] == 0)
+
+    # intermediate variables (channeling constraints)
+    intermediate_zeroes = np.ndarray((size, size), dtype=cp_model.IntVar)
+    intermediate_missing_row_digits = np.ndarray((size, size), dtype=cp_model.IntVar)
+    intermediate_missing_col_digits = np.ndarray((size, size), dtype=cp_model.IntVar)
     for i, j in np.ndindex(size, size):
-        model.Add(grid_vars[i, j, 0] == 1).OnlyEnforceIf(
-            sum(grid_vars[k, l, 0] == 1
-                for k in range(1, digits)
-                for l in range(1, digits)
-                if missing_row_bools[i, k] == 1
-                and missing_col_bools[j, l] == 1
-                ) >= 1,
-        )
+        intermediate_zeroes[i, j] = zero_var = model.NewBoolVar(f"r{i+1}r{j+1}==0")
+        zero_expr = grid_vars[i, j, 0]
+        model.Add(zero_expr == 1).OnlyEnforceIf(zero_var)
+        model.Add(zero_expr != 1).OnlyEnforceIf(zero_var.Not())
+
+        intermediate_missing_row_digits[i, j] = row_var = model.NewBoolVar(f"r{i+1}_missing_{j}")
+        row_expr = sum(grid_vars[i, :, j+1])
+        model.Add(row_expr == 0).OnlyEnforceIf(row_var)
+        model.Add(row_expr != 0).OnlyEnforceIf(row_var.Not())
+
+        intermediate_missing_col_digits[i, j] = col_var = model.NewBoolVar(f"c{i+1}_missing_{j}")
+        col_expr = sum(grid_vars_t[i, :, j+1])
+        model.Add(col_expr == 0).OnlyEnforceIf(col_var)
+        model.Add(col_expr != 0).OnlyEnforceIf(col_var.Not())
+
+    # a zero may only be placed if it indexes another zero by digits replaced in row/column
+    for i, j, r, c in np.ndindex(size, size, size, size):
+        model.Add(intermediate_zeroes[r, c] == 1).OnlyEnforceIf(intermediate_zeroes[i, j],
+                                                                intermediate_missing_row_digits[i, r],
+                                                                intermediate_missing_col_digits[j, c])
 
     solver = cp_model.CpSolver()
     solution_printer = SolutionPrinter(grid_vars)

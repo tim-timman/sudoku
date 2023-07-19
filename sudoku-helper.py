@@ -1,7 +1,9 @@
 #!/usr/bin/env python3.11
 import atexit
 import argparse
+import functools
 from collections import defaultdict
+from contextlib import suppress
 from functools import reduce, partial
 from functools import total_ordering
 import itertools
@@ -20,13 +22,26 @@ from rich.table import Table
 
 
 @total_ordering
-class SudokuSet(set):
+class SudokuSet(frozenset):
+    _selves = {}
+
+    @functools.cache
+    def __new__(cls, *args, **kwargs):
+        _hash = sum((1 << 9) >> x for x in args[0]) if args else 0
+        if self := cls._selves.get(_hash, None):
+            return self
+        self = super(SudokuSet, cls).__new__(cls, *args, **kwargs)
+        self._hash = _hash
+        cls._selves[_hash] = self
+        self._str = sub_color("".join([f" {v} " for v in sorted(args[0])])) if args else ""
+        return self
+
     def __hash__(self):
         # Switch order for easy comparison
-        return sum((1 << 9) >> x for x in self)
+        return self._hash
 
     def __str__(self):
-        return sub_color("".join([f" {v} " for v in sorted(self)]))
+        return self._str
 
     def __lt__(self, other):
         if not isinstance(other, type(self)):
@@ -56,11 +71,11 @@ class Args(argparse.Namespace):
     sums: list[int]
     num_digits: list[int]
     digit_set: list[int]
-    include_digits: list[list[int]]
-    exclude_digits: list[list[int]]
+    include_digits: list[tuple[tuple[int, int], list[int]]]
+    exclude_digits: list[tuple[tuple[int, int], list[int]]]
     num_odd: int | None
     num_even: int | None
-    mask: list[int]
+    mask: list[tuple[tuple[int, int], list[int]]]
     nop: bool
 
 
@@ -70,6 +85,15 @@ Alternatives = Iterable[list[SudokuSet[int]]]
 def default_nop(fn):
     fn.__nop__ = True
     return fn
+
+
+def merge(a, b) -> Alternatives:
+    a = list(a)
+    b = list(b)
+    if not b:
+        return a
+    return [[*x, *y] for x in a for y in b
+            if x or y]
 
 
 def exclusive(a: Alternatives, b: Alternatives) -> Alternatives:
@@ -90,26 +114,57 @@ def same_sum(a: Alternatives, b: Alternatives) -> Alternatives:
 @default_nop
 def drop(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     """drop columns according to mask"""
-    return zip(*itertools.compress(chain(zip(*a), zip(*b)), chain(args.mask, repeat(1))))
+    mask = list(chain.from_iterable(m[1] for m in chain(args.mask)))
+    return zip(*itertools.compress(zip(*merge(a, b)), chain(mask, repeat(1))))
 
 
 @default_nop
 def permute(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     """permute columns using mask to denote new index"""
-    mask = iter(args.mask)
+    mask = chain.from_iterable(m[1] for m in chain(args.mask))
     m = 0
     ret = defaultdict(list)
-    for val in chain(zip(*a), zip(*b)):
+    for val in zip(*merge(a, b)):
         m = next(mask, m)
         ret[m].insert(m, val)
 
     return zip(*chain.from_iterable(x[1] for x in sorted(ret.items())))
 
 
+def overlap(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
+    """\
+    mark columns as sets by index and number and filter if they don't overlap
+
+    ex. 3 columns. ... -- OVER -m 101  will filter rows where the set of the
+    1st and 3rd column doesn't have an overlap with the 2nd
+    """
+    rows = merge(a, b)
+    num_sets = list(range(len(rows[0])))
+    if not args.mask:
+        mask = (num_sets[:-1], num_sets[-1:])
+    else:
+        mask_dict = defaultdict(list)
+        for val in chain.from_iterable(m[1] for m in chain(args.mask)):
+            try:
+                idx = num_sets.pop(0)
+            except IndexError:
+                break
+            mask_dict[val].append(idx)
+        mask = (*mask_dict.values(), num_sets)
+    mask = list(filter(lambda x: x, mask))
+
+    def sets_overlap(s):
+        sets = list((reduce(operator.or_, (s[i] for i in m)) for m in mask))  # union
+        return not not list(reduce(operator.and_, sets))  # intersection
+
+    return (x for x in rows if sets_overlap(x))
+
+
 operators: dict[str, Callable[[Alternatives, Alternatives], Alternatives]] = {
     "X": exclusive,
     "SUM": same_sum,
     "DROP": drop,
+    "OVER": overlap,
     "PER": permute,
 }
 
@@ -120,12 +175,12 @@ class SetAction(argparse.Action):
 
 
 def set_type(string: str):
-    match = re.match(r"(?:(\d(?!\d))?-?(\d)?:)?([1-9]+)$", string)
+    match = re.match(r"(?:(\d(?!\d))?-?(\d)?:)?(\d+)$", string)
     if match is None:
         raise argparse.ArgumentTypeError(
             f"{string!r} invalid syntax, must be [d-d:]XXXX "
             f"ex. 1-2:12345 => include 1 or 2 of set {{1,2,3,4,5}}")
-    digits = set(map(int, match[3]))
+    digits = list((map(int, match[3])))
     start = match[1]
     end = match[2]
 
@@ -138,7 +193,28 @@ def set_type(string: str):
     return (int(start), int(end)), digits
 
 
-def main(prev_alternatives: Alternatives = None, raw_args: list[str] = None) -> Alternatives:
+notes = []
+
+
+def defer_note(depth, msg=None):
+    if not notes:
+        atexit.register(defer_note, -1)
+
+    if depth >= 0:
+        notes.append((depth, f"\n  [red]Note: [/]{msg}\n"))
+        return
+
+    d, note = notes.pop()
+    while True:
+        print(note)
+        with suppress(IndexError):
+            temp, note = notes.pop()
+            if temp < d:
+                return
+        return
+
+
+def main(prev_alternatives: Alternatives = None, raw_args: list[str] = None, depth=0) -> Alternatives:
     parser = argparse.ArgumentParser()
     parser.add_argument("-s", "--sums", type=int, nargs="*", metavar="SUM",
                         help="sums to match of given digits (DEFAULT: %(default)s)")
@@ -162,7 +238,7 @@ def main(prev_alternatives: Alternatives = None, raw_args: list[str] = None) -> 
                         help="the minimum number of odd number to match")
     parser.add_argument("-e", "--num-even", type=int, metavar="NUM",
                         help="the minimum number of even number to match")
-    parser.add_argument("-m", "--mask", type=int, nargs="*", action="extend", default=[],
+    parser.add_argument("-m", "--mask", type=set_type, nargs="*", action=SetAction, default=[],
                         help="a mask for various commands (DEFAULT: %(default)s)")
 
     parser.add_argument("--", dest="bork", choices=operators.keys(), nargs="*",
@@ -233,10 +309,8 @@ def main(prev_alternatives: Alternatives = None, raw_args: list[str] = None) -> 
             kwargs[name] = rest
 
         alternatives = op_func(prev_alternatives, alternatives, **kwargs)
-        if arg_overrides.get("nop", None) and not rest:
-            def warn():
-                print(f"\n  [red]Note: [/]Nop was set by [b]{op}[/] command. [i]Use --no-nop to override.[/]\n")
-            atexit.register(warn)
+        if arg_overrides.get("nop", None):
+            defer_note(depth, f"Nop was set by [b]{op}[/] command. [i]Use --no-nop to override.[/]")
 
         # if alternatives:
         #     alternatives = list(alternatives)
@@ -244,14 +318,14 @@ def main(prev_alternatives: Alternatives = None, raw_args: list[str] = None) -> 
         #         print(" ".join(map(str, a)))
 
     if rest:
-        alternatives = main(alternatives, rest)
+        alternatives = main(alternatives, rest, depth + 1)
 
-    if prev_alternatives:
+    if depth > 0:
         return alternatives
 
     prepared = sorted((sum(chain(*a)), tuple(map(sum, a)), a) for a in alternatives)
-    seen = SudokuSet()
-    common = SudokuSet(options)
+    seen = set()
+    common = set(options)
     table = None
     for total_sum, sep_sum, a in prepared:
         if table is None:
@@ -263,11 +337,10 @@ def main(prev_alternatives: Alternatives = None, raw_args: list[str] = None) -> 
         table.add_row(str(total_sum), str(sep_sum), *map(str, a))
 
     print(table)
-    print(f"\n  Aggregated digits: {sub_color(str(seen))}")
-    print(  f"   Digits in common: {sub_color(str(common))}")
+    print(f"\n  Aggregated digits: {SudokuSet(tuple(seen))}")
+    print(  f"   Digits in common: {SudokuSet(tuple(common))}")
 
     print(f"\n  Number matching results: {len(prepared)}")
-    raise SystemExit(0)
 
 
 if __name__ == "__main__":

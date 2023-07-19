@@ -84,6 +84,8 @@ class Args(argparse.Namespace):
     num_even: int | None
     mask: MaskType
     nop: bool
+    invert: bool
+    combinations: bool
 
 
 Alternatives = Iterable[list[SudokuSet[int]]]
@@ -94,25 +96,36 @@ def default_nop(fn):
     return fn
 
 
-def merge(a, b) -> Alternatives:
+def merge(a, b, args: Args) -> Alternatives:
     a = list(a)
     b = list(b)
     if not b:
         return a
-    return [[*x, *y] for x in a for y in b
-            if x or y]
+    if args.combinations:
+        return [[*x, *y] for x in a for y in b
+                if x or y]
+    else:
+        return [[*(x if x else [SudokuSet()] * (len(a[0]) if a else 0)),
+                 *(y if y else [SudokuSet()] * (len(b[0]) if b else 0))]
+                for x, y in zip_longest(a, b, fillvalue=None)]
 
 
 def exclusive(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     """keep alternatives where the joint set are all unique"""
-    rows = list(merge(a, b))
+    rows = list(merge(a, b, args))
     if not rows:
         return iter(())
     masks = create_index_masks(args.mask, len(rows[0]))
+    min_overlap, max_overlap = args.mask[0]
+    if max_overlap is None:
+        max_overlap = 0 if min_overlap is None else min_overlap
+    if min_overlap is None:
+        min_overlap = 0
 
     def sets_disjoint(row):
         sets = build_sets_from_index_mask(masks, row)
-        return all(x.isdisjoint(y) for x, y in combinations(sets, 2))
+        return all(min_overlap <= len(x.intersection(y)) <= max_overlap
+                   for x, y in combinations(sets, 2))
 
     return (x for x in rows if sets_disjoint(x))
 
@@ -132,7 +145,7 @@ def get_number_mask(args_mask) -> Iterator[int]:
 def drop(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     """drop columns according to mask"""
     mask = get_number_mask(args.mask)
-    return zip(*itertools.compress(zip(*merge(a, b)), chain(mask, repeat(1))))
+    return zip(*itertools.compress(zip(*merge(a, b, args)), chain(mask, repeat(1))))
 
 
 @default_nop
@@ -141,7 +154,7 @@ def permute(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     mask = get_number_mask(args.mask)
     m = 0
     ret = defaultdict(list)
-    for val in zip(*merge(a, b)):
+    for val in zip(*merge(a, b, args)):
         m = next(mask, m)
         ret[m].insert(m, val)
 
@@ -162,7 +175,7 @@ def create_index_masks(args_mask, length):
             if val == -1:
                 continue
             mask_dict[val].append(idx)
-        mask = (*mask_dict.values(), num_sets)
+        mask = (*(v for _, v in sorted(mask_dict.items())), num_sets)
     mask = list(filter(lambda x: x, mask))
     return mask
 
@@ -184,14 +197,14 @@ def overlap(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     ex. 3 columns. ... -- OVER -m 101  will filter rows where the set of the
     1st and 3rd column doesn't have an overlap with the 2nd
     """
-    rows = list(merge(a, b))
+    rows = list(merge(a, b, args))
     if not rows:
         return iter(())
     masks = create_index_masks(args.mask, len(rows[0]))
     min_overlap, max_overlap = args.mask[0]
-    if not min_overlap:
-        min_overlap = 1 if not max_overlap else max_overlap
-    if not max_overlap:
+    if min_overlap is None:
+        min_overlap = 1 if max_overlap is None else max_overlap
+    if max_overlap is None:
         max_overlap = len(args.digit_set[1])
 
     def sets_overlap(row):
@@ -202,9 +215,23 @@ def overlap(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     return (x for x in rows if sets_overlap(x))
 
 
-def add(a: Alternatives, b: Alternatives) -> Alternatives:
+def add(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     """just add a column"""
-    return merge(a, b)
+    return merge(a, b, args)
+
+
+def diff(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
+    """keep the difference in a from b"""
+    rows = list(merge(a, b, args))
+    if not rows:
+        return iter(())
+    masks = create_index_masks(args.mask, len(rows[0]))
+    columns = list(zip(*rows))
+    return (x for x in rows
+            if not any(x[mi] in columns[mj]
+                       for mi in masks[0]
+                       for m in masks[1:]
+                       for mj in m))
 
 
 operators: dict[str, Callable[[Alternatives, Alternatives], Alternatives]] = {
@@ -214,6 +241,7 @@ operators: dict[str, Callable[[Alternatives, Alternatives], Alternatives]] = {
     "OVER": overlap,
     "PER": permute,
     "ADD": add,
+    "DIFF": diff,
 }
 
 
@@ -290,6 +318,10 @@ def main(prev_alternatives: Alternatives = [], raw_args: list[str] = None) -> Al
                         help="the minimum number of even number to match")
     parser.add_argument("-m", "--mask", type=set_type, action=SetAction, default=((None, None), []),
                         help="a mask for various commands (DEFAULT: %(default)s)")
+    parser.add_argument("-v", "--invert", action="store_true",
+                        help="invert the result of an action action")
+    parser.add_argument("--combo", dest="combinations", action=argparse.BooleanOptionalAction, default=True,
+                        help="use combinations for merging alternatives")
 
     parser.add_argument("--", dest="bork", choices=operators.keys(), nargs="*",
                         default=argparse.SUPPRESS,
@@ -356,6 +388,9 @@ def main(prev_alternatives: Alternatives = [], raw_args: list[str] = None) -> Al
 
     alternatives = list([x] for x in tmp)
 
+    if not list(chain.from_iterable(alternatives)):
+        defer_note(depth_var.get(), f"last set had no alternatives")
+
     num_columns = len(list(chain.from_iterable((*prev_alternatives[:1], *alternatives[:1]))))
     if len(args.mask[1]) > num_columns:
         defer_note(depth_var.get(), f"[b]--mask[/] targeted {len(args.mask[1])} sets, but there are only {num_columns} – maybe look it over.")
@@ -368,7 +403,13 @@ def main(prev_alternatives: Alternatives = [], raw_args: list[str] = None) -> Al
         if name := next((k for k, v in op_func.__annotations__.items() if v == list[str]), None):
             kwargs[name] = rest
 
+        original = merge(prev_alternatives, alternatives, args)
         alternatives = list(op_func(prev_alternatives, alternatives, **kwargs))
+        if args.invert:
+            alternatives = [x for x in original if x not in alternatives]
+
+        # filter duplicates
+        alternatives = [x for i, x in enumerate(alternatives) if x not in alternatives[i+1:]]
 
         if arg_overrides.get("nop", None):
             defer_note(depth_var.get(), f"Nop was set by [b]{op}[/] command. [i]Use --no-nop to override.[/]")

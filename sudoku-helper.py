@@ -13,7 +13,7 @@ import operator
 from operator import itemgetter, methodcaller
 import re
 from textwrap import dedent, indent
-from typing import Callable, Iterable, Literal, get_args
+from typing import Callable, Iterable, Literal, get_args, Iterator
 
 import rich.color
 from rich import print
@@ -96,12 +96,16 @@ def merge(a, b) -> Alternatives:
             if x or y]
 
 
-def exclusive(a: Alternatives, b: Alternatives) -> Alternatives:
-    """keep alternatives where the joint set of a's and b's are all unique"""
-    a = list(a)
-    b = list(b)
-    return ([*x, *y] for x in a for y in b
-            if set(chain(*x)).isdisjoint(chain(*y)))
+def exclusive(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
+    """keep alternatives where the joint set are all unique"""
+    rows = list(merge(a, b))
+    masks = create_index_masks(args.mask, len(rows[0]))
+
+    def sets_disjoint(row):
+        sets = build_sets_from_index_mask(masks, row)
+        return bool(reduce(methodoperator("isdisjoint"), sets))
+
+    return (x for x in rows if sets_disjoint(x))
 
 
 def same_sum(a: Alternatives, b: Alternatives) -> Alternatives:
@@ -111,17 +115,21 @@ def same_sum(a: Alternatives, b: Alternatives) -> Alternatives:
             if x != y and sum(chain(*x)) == sy)
 
 
+def get_number_mask(args_mask) -> Iterator[int]:
+    return chain.from_iterable(m[1] for m in chain(args_mask))
+
+
 @default_nop
 def drop(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     """drop columns according to mask"""
-    mask = list(chain.from_iterable(m[1] for m in chain(args.mask)))
+    mask = get_number_mask(args.mask)
     return zip(*itertools.compress(zip(*merge(a, b)), chain(mask, repeat(1))))
 
 
 @default_nop
 def permute(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
     """permute columns using mask to denote new index"""
-    mask = chain.from_iterable(m[1] for m in chain(args.mask))
+    mask = get_number_mask(args.mask)
     m = 0
     ret = defaultdict(list)
     for val in zip(*merge(a, b)):
@@ -137,11 +145,13 @@ def create_index_masks(args_mask, length):
         mask = (num_sets[:-1], num_sets[-1:])
     else:
         mask_dict = defaultdict(list)
-        for val in chain.from_iterable(m[1] for m in chain(args_mask)):
+        for val in get_number_mask(args_mask):
             try:
                 idx = num_sets.pop(0)
             except IndexError:
                 break
+            if val == -1:
+                continue
             mask_dict[val].append(idx)
         mask = (*mask_dict.values(), num_sets)
     mask = list(filter(lambda x: x, mask))
@@ -180,18 +190,6 @@ def add(a: Alternatives, b: Alternatives) -> Alternatives:
     return merge(a, b)
 
 
-def diff(a: Alternatives, b: Alternatives, args: Args) -> Alternatives:
-    """keep only disjoint sets from mask"""
-    rows = list(merge(a, b))
-    masks = create_index_masks(args.mask, len(rows[0]))
-
-    def sets_disjoint(row):
-        sets = build_sets_from_index_mask(masks, row)
-        return bool(reduce(methodoperator("isdisjoint"), sets))
-
-    return (x for x in rows if sets_disjoint(x))
-
-
 operators: dict[str, Callable[[Alternatives, Alternatives], Alternatives]] = {
     "X": exclusive,
     "SUM": same_sum,
@@ -199,7 +197,6 @@ operators: dict[str, Callable[[Alternatives, Alternatives], Alternatives]] = {
     "OVER": overlap,
     "PER": permute,
     "ADD": add,
-    "DIFF": diff,
 }
 
 
@@ -209,12 +206,12 @@ class SetAction(argparse.Action):
 
 
 def set_type(string: str):
-    match = re.match(r"(?:(\d(?!\d))?-?(\d)?:)?(\d+)$", string)
+    match = re.match(r"(?:(\d(?!\d))?-?(\d)?:)?([\dx]+)$", string)
     if match is None:
         raise argparse.ArgumentTypeError(
             f"{string!r} invalid syntax, must be [d-d:]XXXX "
             f"ex. 1-2:12345 => include 1 or 2 of set {{1,2,3,4,5}}")
-    digits = list((map(int, match[3])))
+    digits = [int(x) if x.isdigit() else -1 for x in match[3]]
     start = match[1]
     end = match[2]
 
@@ -290,8 +287,9 @@ def main(prev_alternatives: Alternatives = None, raw_args: list[str] = None, dep
             if (sep := raw_args.pop(0)) != "--":
                 parser.error(f"wrong separator: {sep!r}")
             if not raw_args:
-                parser.error("missing chain operator")
-            if (op_func := operators.get(op := raw_args.pop(0), None)) is None:
+                defer_note(depth - 1, "missing chain operator")
+                return prev_alternatives
+            if (op_func := operators.get(op := raw_args.pop(0).upper(), None)) is None:
                 parser.error(f"invalid chain operator: {op!r}")
             if hasattr(op_func, "__nop__"):
                 arg_overrides["nop"] = True

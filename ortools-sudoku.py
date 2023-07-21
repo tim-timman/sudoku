@@ -98,6 +98,7 @@ def main(board=None):
         intermediate_zeroes = np.ndarray((size, size), dtype=cp_model.IntVar)
         intermediate_missing_row_digits = np.ndarray((size, size), dtype=cp_model.IntVar)
         intermediate_missing_col_digits = np.ndarray((size, size), dtype=cp_model.IntVar)
+
         for i, j in np.ndindex(size, size):
             intermediate_zeroes[i, j] = zero_var = model.NewBoolVar(f"r{i+1}r{j+1}==0")
             zero_expr = grid_vars[i, j, 0]
@@ -120,8 +121,33 @@ def main(board=None):
                                                                     intermediate_missing_row_digits[i, r],
                                                                     intermediate_missing_col_digits[j, c])
 
-        # the missing digit in a box with a zero is the same missing in the column
-        # @TODO
+        # the digit missing in a column with a zero must be the same as in the zero's box
+        # @Note: this constraint makes it take forever to compute.
+        column_box_constraint = False
+        if column_box_constraint:
+            intermediate_missing_box_digits = np.ndarray((size, size), dtype=cp_model.IntVar)
+            intermediate_box_col_missing_same = np.ndarray((size, size), dtype=cp_model.IntVar)
+
+            for i, j in np.ndindex(size, size):
+                intermediate_missing_box_digits[i, j] = box_var = model.NewBoolVar(f"b{i + 1}_missing_{j}")
+                brow = i // 3 * 3
+                bcol = i % 3 * 3
+                box_expr = sum(grid_vars[brow:brow + 3, bcol:bcol + 3, j + 1].flat)
+                model.Add(box_expr == 0).OnlyEnforceIf(box_var)
+                model.Add(box_expr != 0).OnlyEnforceIf(box_var.Not())
+
+            for i, j in np.ndindex(size, size):
+                bcol = i % 3 * 3
+                if bcol <= j < bcol + 3:
+                    intermediate_box_col_missing_same[i, j] = box_col_var = model.NewBoolVar(f"b{i + 1} == c{j + 1}")
+                    box_sum = sum(intermediate_missing_box_digits[i, k] * (k + 1) for k in range(9))
+                    col_sum = sum(intermediate_missing_col_digits[j, k] * (k + 1) for k in range(9))
+                    model.Add(box_sum == col_sum).OnlyEnforceIf(box_col_var)
+                    model.Add(box_sum != col_sum).OnlyEnforceIf(box_col_var.Not())
+
+            for i, j in np.ndindex(size, size):
+                box_idx = i // 3 * 3 + (j // 3) % 3
+                model.Add(intermediate_box_col_missing_same[box_idx, j] == 1).OnlyEnforceIf(intermediate_zeroes[i, j])
 
     if USE_EVENS:
         # row/column coordinates

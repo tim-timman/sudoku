@@ -38,20 +38,20 @@ model = Model(
      for i, j in np.ndindex(*grid.shape)],
 )
 
-# a zero in a box implies the box is missing the same digit as the column
-# @Note: this constraint takes forever to compute...
-for i in range(0, 9, 3):
-    for j in range(9):
-        br = i // 3 * 3
-        bc = j // 3 * 3
-        box_mask = np.zeros((3, 3))
-        box_mask[:, j % 3] = 1
-        box = np.ma.masked_array(grid[br:br+3, bc:bc+3], mask=box_mask).compressed()
-
-        column_mask = np.zeros((9,))
-        column_mask[br:br+3] = 1
-        column = np.ma.masked_array(grid.T[j], mask=column_mask).compressed()
-        model += (Count(grid[i:i+3, j], 0) == 1).implies(sum(box) == sum(column))
+# # a zero in a box implies the box is missing the same digit as the column
+# # @Note: this constraint takes forever to compute...
+# for i in range(0, 9, 3):
+#     for j in range(9):
+#         br = i // 3 * 3
+#         bc = j // 3 * 3
+#         box_mask = np.zeros((3, 3))
+#         box_mask[:, j % 3] = 1
+#         box = np.ma.masked_array(grid[br:br+3, bc:bc+3], mask=box_mask).compressed()
+#
+#         column_mask = np.zeros((9,))
+#         column_mask[br:br+3] = 1
+#         column = np.ma.masked_array(grid.T[j], mask=column_mask).compressed()
+#         model += (Count(grid[i:i+3, j], 0) == 1).implies(sum(box) == sum(column))
 
 t1 = time.perf_counter_ns()
 if model.solve():

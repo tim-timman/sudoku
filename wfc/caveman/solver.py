@@ -1,8 +1,12 @@
+import argparse
 import random
+from abc import ABC, abstractmethod
 from bisect import bisect
-from collections import defaultdict
+from typing import Optional
 
-random.seed("bork")
+
+class BrokenConstraintError(Exception):
+    pass
 
 
 class Cell:
@@ -13,10 +17,11 @@ class Cell:
         self.row = idx // 9 + 1
         self.col = idx % 9 + 1
         self.box = idx // 27 * 3 + (idx % 9) // 3 + 1
-        self.constraints = []
+        self.constraints: list["Constraint"] = []
 
-    def add_constraint(self, constraint: list["Cell"]):
+    def add_constraint(self, constraint: "Constraint"):
         self.constraints.append(constraint)
+        constraint.add(self)
 
     @property
     def entropy(self):
@@ -32,38 +37,72 @@ class Cell:
         return f"r{self.row}c{self.col}b{self.box}"
 
 
-board = []
-rows = defaultdict(list)
-cols = defaultdict(list)
-boxs = defaultdict(list)
+class Constraint(ABC):
+    def __init__(self, name: str):
+        self.name = name
+        self.cells: list[Cell] = []
+
+    def add(self, cell: Cell):
+        self.cells.append(cell)
+
+    @abstractmethod
+    def constrain(self, given_cell: Cell):
+        ...
+
+    def __repr__(self):
+        return f"{self.__class__}{self.name}<{','.join(sorted(map(repr, self.cells)))}>"
 
 
-for i in range(9 * 9):
-    cell = Cell(i)
-    board.append(cell)
-    for c in (rows[cell.row], cols[cell.col], boxs[cell.box]):
-        c.append(cell)
-        cell.constraints.append(c)
-
-
-remaining_cells = set(board)
-
-while remaining_cells:
-    by_entropy = sorted(remaining_cells)
-    # Pick the lowest entropy cell
-    cell: Cell = random.choice(by_entropy[: bisect(by_entropy, by_entropy[0])])
-    remaining_cells.remove(cell)
-    assert cell.entropy >= 0
-    # Collapse
-    option = {random.choice(list(cell.options))}
-    cell.options = option
-
-    # Update constraints
-    for constraint in cell.constraints:
-        for cell in constraint:
-            if cell not in remaining_cells:
+class Unique(Constraint):
+    def constrain(self, given_cell: Cell):
+        for cell in self.cells:
+            if cell is given_cell:
                 continue
-            cell.options.difference_update(option)
+            cell.options.difference_update(given_cell.options)
+            if cell.entropy < 0:
+                raise BrokenConstraintError(f"{cell} has no remaining options")
+
+
+class ProgArgs(argparse.Namespace):
+    seed: Optional[str] = None
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=str)
+    args = parser.parse_args(namespace=ProgArgs())
+    if args.seed is not None:
+        random.seed(args.seed)
+
+    board = []
+    rows = {i: Unique(f"Row#{i}") for i in range(1, 10)}
+    cols = {i: Unique(f"Col#{i}") for i in range(1, 10)}
+    boxs = {i: Unique(f"Box#{i}") for i in range(1, 10)}
+
+    for i in range(9 * 9):
+        cell = Cell(i)
+        board.append(cell)
+        cell.add_constraint(rows[cell.row])
+        cell.add_constraint(cols[cell.col])
+        cell.add_constraint(boxs[cell.box])
+
+    remaining_cells = set(board)
+
+    while remaining_cells:
+        by_entropy = sorted(remaining_cells)
+        # Pick the lowest entropy cell
+        cell: Cell = random.choice(by_entropy[: bisect(by_entropy, by_entropy[0])])
+        remaining_cells.remove(cell)
+        assert cell.entropy >= 0
+        # Collapse
+        option = {random.choice(list(cell.options))}
+        cell.options = option
+
+        # Update constraints
+        for constraint in cell.constraints:
+            constraint.constrain(cell)
+
+    print(fmt_board(board))
 
 
 def fmt_board(board: list[Cell]):
@@ -89,4 +128,5 @@ def fmt_board(board: list[Cell]):
     return "".join(output)
 
 
-print(fmt_board(board))
+if __name__ == "__main__":
+    main()

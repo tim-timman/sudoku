@@ -1,9 +1,11 @@
 import argparse
+import copy
 import random
+import time
 from abc import ABC, abstractmethod
 from bisect import bisect
 from operator import itemgetter
-from typing import Optional, TypeAlias, Callable
+from typing import Callable, Optional, TypeAlias
 
 
 class BrokenConstraintError(Exception):
@@ -65,30 +67,24 @@ class Constraint(ABC):
 
 
 class Unique(Constraint):
-    def constrain(self, board: list[Cell]):
+    def constrain(self, board: list[Cell]) -> list[Cell]:
         constrained_digits = set()
+        constrained_cells = []
         for cell in sorted(self.extract_cells(board)):
             if cell.entropy == 0:
                 constrained_digits.update(cell.options)
             else:
+                prev_entropy = cell.entropy
                 cell.options.difference_update(constrained_digits)
-                if cell.entropy == 0:
-                    constrained_digits.update(cell.options)
+                if cell.entropy < prev_entropy:
+                    constrained_cells.append(cell)
             if cell.entropy < 0:
                 raise BrokenConstraintError(f"{cell} has no remaining options")
 
-
-class ProgArgs(argparse.Namespace):
-    seed: Optional[str] = None
+        return constrained_cells
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=str)
-    args = parser.parse_args(namespace=ProgArgs())
-    if args.seed is not None:
-        random.seed(args.seed)
-
+def solve():
     board = []
     rows = {i: Unique(f"Row#{i}") for i in range(1, 10)}
     cols = {i: Unique(f"Col#{i}") for i in range(1, 10)}
@@ -102,22 +98,65 @@ def main():
         cell.add_constraint(boxs[cell.box])
 
     remaining_cells = set(board)
+    branches: list[tuple[list[Cell], set[Cell]]] = []
+    number_of_backtracks = 0
+    t_start = time.monotonic_ns()
+    while True:
+        try:
+            while remaining_cells:
+                by_entropy = sorted(remaining_cells)
+                # Pick the lowest entropy cell
+                lowest_group = by_entropy[: bisect(by_entropy, by_entropy[0])]
+                if len(lowest_group) > 1:
+                    # Don't think we need to add a branch here, shouldn't matter, right?
+                    cell: Cell = random.choice(lowest_group)
+                else:
+                    cell = lowest_group[0]
 
-    while remaining_cells:
-        by_entropy = sorted(remaining_cells)
-        # Pick the lowest entropy cell
-        cell: Cell = random.choice(by_entropy[: bisect(by_entropy, by_entropy[0])])
-        remaining_cells.remove(cell)
-        assert cell.entropy >= 0
-        # Collapse
-        option = {random.choice(list(cell.options))}
-        cell.options = option
+                remaining_cells.remove(cell)
 
-        # Update constraints
-        for constraint in cell.constraints:
-            constraint.constrain(board)
+                # Collapse
+                if len(cell.options) > 1:
+                    # add branch
+                    board_snapshot = copy.deepcopy(board)
+                    remaining_cells_snapshot = set(board_snapshot[c.idx] for c in remaining_cells)
 
-    print(fmt_board(board))
+                    cell.options = {random.choice(list(cell.options))}
+
+                    # Remove what we chose in this branch
+                    board_snapshot[cell.idx].options.difference_update(cell.options)
+                    branches.append((board_snapshot, remaining_cells_snapshot))
+
+                constraint_propagation_stack: list[Cell] = [cell]
+                while constraint_propagation_stack:
+                    cell = constraint_propagation_stack.pop()
+                    # Update constraints
+                    for constraint in cell.constraints:
+                        constraint_propagation_stack.extend(constraint.constrain(board))
+        except BrokenConstraintError:
+            if not branches:
+                raise
+            board, remaining_cells = branches.pop()
+            number_of_backtracks += 1
+        else:
+            time_taken = time.monotonic_ns() - t_start
+            print(fmt_board(board))
+            print(f"^ took {time_taken / 10**6:.2f} ms, with {number_of_backtracks} backtracks")
+            break
+
+
+class ProgArgs(argparse.Namespace):
+    seed: Optional[str] = None
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=str)
+    args = parser.parse_args(namespace=ProgArgs())
+    if args.seed is not None:
+        random.seed(args.seed)
+
+    solve()
 
 
 def fmt_board(board: list[Cell]):
@@ -139,7 +178,7 @@ def fmt_board(board: list[Cell]):
         if idx % 9 == 8:
             output += "\n"
 
-    output += "—" * 31, "\n"
+    output += "—" * 31
     return "".join(output)
 
 

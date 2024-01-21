@@ -1,12 +1,9 @@
 import argparse
-import copy
-import pickle
 import random
 import time
 from abc import ABC, abstractmethod
 from bisect import bisect
-from itertools import count
-from operator import attrgetter, itemgetter
+from operator import itemgetter
 from typing import Callable, Optional, TypeAlias
 
 
@@ -49,27 +46,15 @@ class Cell:
     def __repr__(self):
         return f"r{self.row}c{self.col}b{self.box}"
 
-    def __getstate__(self):
-        return self.idx, self.options, tuple(map(attrgetter("id"), self.constraints))
-
-    def __setstate__(self, state):
-        self.idx, self.options, constraint_ids = state
-        self.constraints = itemgetter(*constraint_ids)(Constraint.constraints)
-
 
 CellIdx: TypeAlias = int
 
 
 class Constraint(ABC):
-    constraints = {}
-    counter = count()
-
     def __init__(self, name: str):
         self.name = name
         self.cell_names: set[str] = set()
         self.cell_indices: list[CellIdx] = []
-        self.id = next(Constraint.counter)
-        Constraint.constraints[self.id] = self
 
     def add(self, cell: Cell):
         self.cell_names.add(repr(cell))
@@ -106,7 +91,7 @@ class Unique(Constraint):
         return constrained_cells
 
 
-def solve():
+def solve(verbose: bool = True):
     board = []
     rows = {i: Unique(f"Row#{i}") for i in range(1, 10)}
     cols = {i: Unique(f"Col#{i}") for i in range(1, 10)}
@@ -120,7 +105,7 @@ def solve():
         cell.add_constraint(boxs[cell.box])
 
     remaining_cells = set(board)
-    branches: list[bytes] = []
+    branches: list[tuple[tuple[int], tuple[int]]] = []
     number_of_backtracks = 0
     t_start = time.monotonic_ns()
     while True:
@@ -153,7 +138,7 @@ def solve():
                     )
                     # Remove what we chose in this branch
                     cell.options &= ~option
-                    branches.append(pickle.dumps((board, remaining_cells)))
+                    branches.append((tuple(c.options for c in board), tuple(c.idx for c in remaining_cells)))
                     cell.options = option
 
                 constraint_propagation_stack: list[Cell] = [cell]
@@ -165,19 +150,24 @@ def solve():
         except BrokenConstraintError:
             if not branches:
                 raise
-            board, remaining_cells = pickle.loads(branches.pop())
+            board_options, remaining_cells_indices = branches.pop()
+            for idx, o in enumerate(board_options):
+                board[idx].options = o
+            remaining_cells = set(board[idx] for idx in remaining_cells_indices)
             number_of_backtracks += 1
-            print(
-                number_of_backtracks if number_of_backtracks % 100 == 0 else ".",
-                sep="",
-                end="",
-            )
+            if verbose:
+                print(
+                    number_of_backtracks if number_of_backtracks % 100 == 0 else ".",
+                    sep="",
+                    end="",
+                )
         else:
             time_taken = time.monotonic_ns() - t_start
-            print("\n", fmt_board(board))
-            print(
-                f"^ took {time_taken / 10**6:.2f} ms, with {number_of_backtracks} backtracks"
-            )
+            if verbose:
+                print("\n", fmt_board(board))
+                print(
+                    f"^ took {time_taken / 10**6:.2f} ms, with {number_of_backtracks} backtracks"
+                )
             break
 
 

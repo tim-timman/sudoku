@@ -2,7 +2,8 @@ import argparse
 import random
 from abc import ABC, abstractmethod
 from bisect import bisect
-from typing import Optional
+from operator import itemgetter
+from typing import Optional, TypeAlias, Callable
 
 
 class BrokenConstraintError(Exception):
@@ -37,28 +38,42 @@ class Cell:
         return f"r{self.row}c{self.col}b{self.box}"
 
 
+CellIdx: TypeAlias = int
+
+
 class Constraint(ABC):
     def __init__(self, name: str):
         self.name = name
-        self.cells: list[Cell] = []
+        self.cell_names: set[str] = set()
+        self.cell_indices: list[CellIdx] = []
 
     def add(self, cell: Cell):
-        self.cells.append(cell)
+        self.cell_names.add(repr(cell))
+        # Use indirection to simplify backtracking
+        self.cell_indices.append(cell.idx)
+
+    @property
+    def extract_cells(self) -> Callable[[list[Cell]], list[Cell]]:
+        return itemgetter(*self.cell_indices)
 
     @abstractmethod
-    def constrain(self, given_cell: Cell):
+    def constrain(self, board: list[Cell]):
         ...
 
     def __repr__(self):
-        return f"{self.__class__}{self.name}<{','.join(sorted(map(repr, self.cells)))}>"
+        return f"{self.__class__}{self.name}<{','.join(sorted(self.cell_names))}>"
 
 
 class Unique(Constraint):
-    def constrain(self, given_cell: Cell):
-        for cell in self.cells:
-            if cell is given_cell:
-                continue
-            cell.options.difference_update(given_cell.options)
+    def constrain(self, board: list[Cell]):
+        constrained_digits = set()
+        for cell in sorted(self.extract_cells(board)):
+            if cell.entropy == 0:
+                constrained_digits.update(cell.options)
+            else:
+                cell.options.difference_update(constrained_digits)
+                if cell.entropy == 0:
+                    constrained_digits.update(cell.options)
             if cell.entropy < 0:
                 raise BrokenConstraintError(f"{cell} has no remaining options")
 
@@ -100,7 +115,7 @@ def main():
 
         # Update constraints
         for constraint in cell.constraints:
-            constraint.constrain(cell)
+            constraint.constrain(board)
 
     print(fmt_board(board))
 

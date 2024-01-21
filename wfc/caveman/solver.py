@@ -104,23 +104,23 @@ def solve(verbose: bool = True):
         cell.add_constraint(cols[cell.col])
         cell.add_constraint(boxs[cell.box])
 
-    remaining_cells = set(board)
+    remaining_cells = board.copy()
     branches: list[tuple[tuple[int], tuple[int]]] = []
     number_of_backtracks = 0
     t_start = time.monotonic_ns()
     while True:
         try:
             while remaining_cells:
-                by_entropy = sorted(remaining_cells)
+                remaining_cells.sort()
                 # Pick the lowest entropy cell
-                lowest_group = by_entropy[: bisect(by_entropy, by_entropy[0])]
-                if len(lowest_group) > 1:
+                last_idx_in_entropy_group = bisect(remaining_cells, remaining_cells[0]) - 1
+                if last_idx_in_entropy_group > 0:
                     # Don't think we need to add a branch here, shouldn't matter, right?
-                    cell: Cell = random.choice(lowest_group)
+                    cell_idx = random.randint(0, last_idx_in_entropy_group)
                 else:
-                    cell = lowest_group[0]
+                    cell_idx = 0
 
-                remaining_cells.remove(cell)
+                cell = remaining_cells.pop(cell_idx)
 
                 # Collapse
                 if cell.entropy > 0:
@@ -153,7 +153,7 @@ def solve(verbose: bool = True):
             board_options, remaining_cells_indices = branches.pop()
             for idx, o in enumerate(board_options):
                 board[idx].options = o
-            remaining_cells = set(board[idx] for idx in remaining_cells_indices)
+            remaining_cells = [board[idx] for idx in remaining_cells_indices]
             number_of_backtracks += 1
             if verbose:
                 print(

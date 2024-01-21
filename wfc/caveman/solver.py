@@ -1,5 +1,6 @@
 import argparse
 import copy
+from math import log2, floor
 import random
 import time
 from abc import ABC, abstractmethod
@@ -12,9 +13,14 @@ class BrokenConstraintError(Exception):
     pass
 
 
+lut = {
+    i: tuple(filter(None, (i & (1 << x) for x in range(i.bit_length())))) for i in range(1, 1 << 10)
+}
+assert 0b1111111111 in lut
+
 class Cell:
     def __init__(self, idx: int):
-        self.options = {*range(1, 10)}
+        self.options: int = 0b1111111111
         self.idx = idx
         self.y = idx // 9
         self.row = idx // 9 + 1
@@ -26,9 +32,13 @@ class Cell:
         self.constraints.append(constraint)
         constraint.add(self)
 
+    def collapse(self):
+        if self.entropy > 0:
+            self.options = random.choice(lut[self.options])
+
     @property
     def entropy(self):
-        return len(self.options) - 1
+        return self.options.bit_count() - 1
 
     def __lt__(self, other):
         return self.entropy < other.entropy
@@ -59,7 +69,7 @@ class Constraint(ABC):
         return itemgetter(*self.cell_indices)
 
     @abstractmethod
-    def constrain(self, board: list[Cell]):
+    def constrain(self, board: list[Cell]) -> list[Cell]:
         ...
 
     def __repr__(self):
@@ -68,14 +78,14 @@ class Constraint(ABC):
 
 class Unique(Constraint):
     def constrain(self, board: list[Cell]) -> list[Cell]:
-        constrained_digits = set()
+        constrained_digits = 0
         constrained_cells = []
         for cell in sorted(self.extract_cells(board)):
             if cell.entropy == 0:
-                constrained_digits.update(cell.options)
+                constrained_digits |= cell.options
             else:
                 prev_entropy = cell.entropy
-                cell.options.difference_update(constrained_digits)
+                cell.options &= ~constrained_digits
                 if cell.entropy < prev_entropy:
                     constrained_cells.append(cell)
             if cell.entropy < 0:
@@ -116,15 +126,15 @@ def solve():
                 remaining_cells.remove(cell)
 
                 # Collapse
-                if len(cell.options) > 1:
+                if cell.entropy > 0:
                     # add branch
                     board_snapshot = copy.deepcopy(board)
                     remaining_cells_snapshot = set(board_snapshot[c.idx] for c in remaining_cells)
 
-                    cell.options = {random.choice(list(cell.options))}
+                    cell.collapse()
 
                     # Remove what we chose in this branch
-                    board_snapshot[cell.idx].options.difference_update(cell.options)
+                    board_snapshot[cell.idx].options &= ~cell.options
                     branches.append((board_snapshot, remaining_cells_snapshot))
 
                 constraint_propagation_stack: list[Cell] = [cell]
@@ -138,25 +148,30 @@ def solve():
                 raise
             board, remaining_cells = branches.pop()
             number_of_backtracks += 1
+            print(number_of_backtracks if number_of_backtracks % 100 == 0 else ".", sep="", end="")
         else:
             time_taken = time.monotonic_ns() - t_start
-            print(fmt_board(board))
+            print("\n", fmt_board(board))
             print(f"^ took {time_taken / 10**6:.2f} ms, with {number_of_backtracks} backtracks")
             break
 
 
 class ProgArgs(argparse.Namespace):
     seed: Optional[str] = None
+    forever: bool = False
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=str)
+    parser.add_argument("-f", "--forever", action="store_true")
     args = parser.parse_args(namespace=ProgArgs())
     if args.seed is not None:
         random.seed(args.seed)
 
     solve()
+    while args.forever:
+        solve()
 
 
 def fmt_board(board: list[Cell]):
@@ -169,8 +184,7 @@ def fmt_board(board: list[Cell]):
         if idx % 9 == 0:
             output += "|"
 
-        digit = cell.options.pop()
-        output += " ", str(digit), " "
+        output += " ", str(cell.options.bit_length() - 1), " "
 
         if idx % 3 == 2:
             output += "|"

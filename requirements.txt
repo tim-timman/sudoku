@@ -1,3 +1,4 @@
 rich
 ortools
 cpmpy
+numpy

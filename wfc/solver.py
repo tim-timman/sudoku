@@ -29,90 +29,24 @@ Loop:
 """
 import math
 import time
-import signal
-from itertools import chain
-from typing import Callable, NamedTuple, Optional
+from typing import Optional
 
 import numpy as np
 import numpy.ma as ma
-import numpy.typing as npt
+from rich.progress import Progress, TextColumn, TimeElapsedColumn, BarColumn
 
-signal.signal(signal.SIGUSR1, lambda *args: breakpoint())
-
-options = np.array([1 << x for x in range(0, 10)], dtype=np.uint16)
-
-COLLAPSED = np.uint16(1 << 15)
-
-board_size = 81
-
-index_board = np.arange(board_size)
-
-# Each array contains board indices that must all contain unique digits.
-# Note: Keep the row, column, box constraints in 1st, 2nd, and 3rd positions respectively.
-# Hint: Extract the specific row, column, box as follows:
-#   row, col, box = unique_constraints[np.isin(unique_constraints, cell_idx).any(axis=1)][:3]
-unique_constraints = np.array([
-    # Sudoku row constraints
-    *index_board.reshape((9, 9)),
-    # Sudoku column constraints
-    *index_board.reshape((9, 9)).T,
-    # Sudoku box constraints
-    *chain.from_iterable(index_board.reshape((27, 3))[i::3].reshape((3, 9)) for i in range(3))
-    # ---[ extra constraints below ]---
-])
-
-type Board = npt.NDArray[board_size, np.dtype[np.uint16]]
-type CellIndex = int
-
-
-class BrokenConstraintsError(Exception):
-    """Custom exception for control flow when a constraint is broken"""
-
-
-def apply_unique_constraints(board: Board, idx: CellIndex):
-    for constraint in unique_constraints[np.isin(unique_constraints, idx).any(axis=1)]:
-        mask = ma.masked_less(board[constraint], COLLAPSED, copy=False)
-        if np.all(mask.mask):
-            # All cells already collapsed.
-            continue
-        collapsed = ma.sum(mask ^ COLLAPSED)
-        board[constraint[mask.mask]] &= ~collapsed
-
-        # If any cell has no (zero) options left.
-        if np.any(board[constraint] & ~COLLAPSED == 0):
-            raise BrokenConstraintsError
-
-
-def apply_zero_constraint(board: Board, _: CellIndex):
-    """Special global zero constraint
-
-    A column with a zero in it must match the digits of the zero's box.
-    """
-    collapsed_zero_indices = np.flatnonzero(board == options[0] | COLLAPSED)
-
-    for cell_idx in collapsed_zero_indices:
-        col, box = constraints = unique_constraints[np.isin(unique_constraints, cell_idx).any(axis=1)][1:3]
-        # Find the symmetric difference between box and column;
-        #  these must be match.
-        box_column_intersection = np.intersect1d(col, box, assume_unique=True)
-        box_part = np.setdiff1d(box, box_column_intersection, assume_unique=True)
-        column_part = np.setdiff1d(col, box_column_intersection, assume_unique=True)
-
-        column_options = np.bitwise_or.reduce(board[column_part]) | COLLAPSED
-        board[box_part] &= column_options
-
-        box_options = np.bitwise_or.reduce(board[box_part]) | COLLAPSED
-        board[column_part] &= box_options
-
-        if np.any(board[constraints] & ~COLLAPSED == 0):
-            raise BrokenConstraintsError
-
-
-# Note: order matters
-constraints: list[Callable[[Board, CellIndex], None]] = [
-    apply_unique_constraints,
-    apply_zero_constraint
-]
+from . constraints import constraints_list, assert_board_validity
+from .types import (
+    board_size,
+    board_dt,
+    invalid_board_dt,
+    Result,
+    options,
+    COLLAPSED,
+    Board,
+    BrokenConstraintsError,
+    NoSolutions,
+)
 
 
 @np.vectorize
@@ -120,111 +54,116 @@ def entropy(x: int):
     return x.bit_count()
 
 
-invalid_board_dt = np.dtype("41B")
-board_dt = np.dtype(f"{board_size}u2")
+invalid_boards = np.zeros(128, dtype=invalid_board_dt)
+invalid_boards_idx = -1
 
 
-class Result(NamedTuple):
-    board: Board
-    num_backtracks: int
-
-
-def solve(initial_board: Optional[Board] = None, *, seed=None) -> Result:
+def solve(initial_board: Optional[Board] = None, *, seed=None, debug=False, quiet=False) -> Result:
+    global invalid_boards, invalid_boards_idx
     rng = np.random.default_rng(seed)
-    if seed is not None:
+    if seed is None:
         print(rng.bit_generator.seed_seq)
-
-    invalid_boards = np.zeros(128, dtype=invalid_board_dt)
-    invalid_boards_idx = -1
     board_stack = np.empty((256,), dtype=board_dt)
     board_stack[0] = initial_board if initial_board is not None else sum(options)
     board_idx = 0
     board = np.empty((), dtype=board_dt)
     num_backtracks = 0
+    prevented_recalculations = 0
+    if not (debug or quiet):
+        p = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            TextColumn("Iterations: {task.completed} | Backtracks: {task.fields[backtracks]} | Invalid Boards: {task.fields[invalid_boards]} | Prevented Recalculations: {task.fields[prevented_recalculations]}"),
+        )
+    else:
+        from unittest.mock import MagicMock
+        p = MagicMock()
+    with p as progress:
+        task = progress.add_task("Generating solution...", total=None, backtracks=num_backtracks, invalid_boards=invalid_boards_idx, prevented_recalculations=prevented_recalculations)
+        while True:
+            if board_idx < 0:
+                raise NoSolutions
+            progress.update(task, advance=1, backtracks=num_backtracks, invalid_boards=invalid_boards_idx, prevented_recalculations=prevented_recalculations)
+            board[:] = board_stack[board_idx]
+            if debug and not quiet:
+                print("\033[1;1H", fmt_debug_board(board), sep="")
+            ma_non_collapsed = ma.masked_greater_equal(board, COLLAPSED, copy=False)
+            if np.all(ma_non_collapsed.mask):
+                assert_board_validity(board)
+                return Result(board, num_backtracks)
 
-    while True:
-        board[:] = board_stack[board_idx]
+            current_board = np.zeros((), dtype=invalid_board_dt)
+            for (idx,), val in ma.ndenumerate(ma.masked_array(board, ~ma_non_collapsed.mask, copy=False)):
+                current_board[idx // 2] = int(math.log2(val ^ COLLAPSED)) << (idx % 2) * 4
 
-        ma_non_collapsed = ma.masked_greater_equal(board, COLLAPSED, copy=False)
-        if np.all(ma_non_collapsed.mask):
-            # Unique set constraints
-            for constraint in unique_constraints:
-                assert np.all(np.unique(board[constraint], return_counts=True)[1] == 1)
+            # Check if current board has already been made invalid.
+            s = slice(0, invalid_boards_idx + 1)
+            if invalid_boards_idx >= 0 and (invalid_boards[s] & current_board == invalid_boards[s]).all(axis=1).any():
+                board_idx -= 1
+                assert board_idx >= 0
+                prevented_recalculations += 1
+                continue
 
-            # Zero constraint
-            for cell_idx in np.flatnonzero(board == options[0] | COLLAPSED):
-                col, box = unique_constraints[np.isin(unique_constraints, cell_idx).any(axis=1)][1:3]
-                assert np.intersect1d(board[col], board[box]).size == col.size
+            entropy_arr = entropy(ma_non_collapsed)
+            lowest_entropy_indices = np.flatnonzero(entropy_arr == entropy_arr.min())
+            cell_idx = rng.choice(lowest_entropy_indices)
+            cell = board[cell_idx]
 
-            return Result(board, num_backtracks)
+            if entropy_arr[cell_idx] > 1:
+                # Multiple options remaining; select one of the options.
+                digit = options[rng.choice(np.flatnonzero(options & cell))]
+                # Update the current board on the stack, removing the branch we're now exploring.
+                board_stack[board_idx][cell_idx] ^= digit
+            else:
+                digit = board[cell_idx]
+                # We're exploring the final option of this board, pop the stack.
+                board_idx -= 1
+                assert digit != 0
 
-        current_board = np.zeros((), dtype=invalid_board_dt)
-        for (idx,), val in ma.ndenumerate(ma.masked_array(board, ~ma_non_collapsed.mask, copy=False)):
-            current_board[idx // 2] = int(math.log2(val ^ COLLAPSED)) << (idx % 2) * 4
+            # Assign the collapsed cell.
+            board[cell_idx] = digit | COLLAPSED
+            try:
+                # Reduce search-space using constraints
+                for constraint in constraints_list:
+                    constraint(board, cell_idx)
+                    if debug:
+                        print("\033[1;1H", fmt_debug_board(board), sep="")
 
-        # Check if current board has already been made invalid.
-        if invalid_boards_idx >= 0 and (invalid_boards[:invalid_boards_idx + 1] & current_board == invalid_boards[:invalid_boards_idx + 1]).all(axis=1).any():
-            board_idx -= 1
-            assert board_idx >= 0
-            continue
 
-        entropy_arr = entropy(ma_non_collapsed)
-        lowest_entropy_indices = np.flatnonzero(entropy_arr == entropy_arr.min())
-        cell_idx = rng.choice(lowest_entropy_indices)
-        cell = board[cell_idx]
+            except BrokenConstraintsError:
+                if debug:
+                    print("\033[1;1H", fmt_debug_board(board), sep="")
 
-        if entropy_arr[cell_idx] > 1:
-            # Multiple options remaining; select one of the options.
-            digit = options[rng.choice(np.flatnonzero(options & cell))]
-            # Update the current board on the stack, removing the branch we're now exploring.
-            board_stack[board_idx][cell_idx] ^= digit
-        else:
-            digit = board[cell_idx]
-            # We're exploring the final option of this board, pop the stack.
-            board_idx -= 1
-            assert board_idx >= 0
-            assert digit != 0
+                invalid_boards_idx += 1
+                if invalid_boards_idx >= invalid_boards.shape[0]:
+                    new_shape = (invalid_boards.shape[0] * 2, *invalid_boards.shape[1:])
+                    try:
+                        invalid_boards.resize(new_shape)
+                    except ValueError:
+                        # When using debugger, due to inspection of variables, the resize above fails
+                        tmp_stack = np.empty(new_shape, invalid_boards.dtype)
+                        tmp_stack[:invalid_boards.shape[0]] = invalid_boards
+                        invalid_boards = tmp_stack
+                invalid_boards[invalid_boards_idx] = current_board
+                num_backtracks += 1
+            else:
+                board_idx += 1
 
-        # Assign the collapsed cell.
-        board[cell_idx] = digit | COLLAPSED
-        try:
-            # Reduce search-space using constraints
-            for constraint in constraints:
-                constraint(board, cell_idx)
+                # Do we need to resize?
+                if board_idx >= board_stack.shape[0]:
+                    # Double for amortized constant time
+                    new_shape = (board_stack.shape[0] * 2, *board_stack.shape[1:])
+                    try:
+                        board_stack.resize(new_shape)
+                    except ValueError:
+                        # When using debugger, due to inspection of variables, the resize above fails
+                        tmp_stack = np.empty(new_shape, board_stack.dtype)
+                        tmp_stack[:board_stack.shape[0]] = board_stack
+                        board_stack = tmp_stack
 
-        except BrokenConstraintsError:
-            invalid_boards_idx += 1
-            if invalid_boards_idx >= invalid_boards.shape[0]:
-                new_shape = (invalid_boards.shape[0] * 2, *invalid_boards.shape[1:])
-                try:
-                    invalid_boards.resize(new_shape)
-                except ValueError:
-                    # When using debugger, due to inspection of variables, the resize above fails
-                    tmp_stack = np.empty(new_shape, invalid_boards.dtype)
-                    tmp_stack[:] = invalid_boards
-                    invalid_boards = tmp_stack
-            # @Performance: we could potentially compact these, to the minimum invalid boards
-            invalid_boards[invalid_boards_idx] = current_board
-            num_backtracks += 1
-            continue
-        else:
-            board_idx += 1
-
-            # Do we need to resize?
-            if board_idx >= board_stack.shape[0]:
-                # Double for amortized constant time
-                new_shape = (board_stack.shape[0] * 2, *board_stack.shape[1:])
-                try:
-                    board_stack.resize(new_shape)
-                except ValueError:
-                    # When using debugger, due to inspection of variables, the resize above fails
-                    tmp_stack = np.empty(new_shape, board_stack.dtype)
-                    tmp_stack[:board_stack.shape[0]] = board_stack
-                    board_stack = tmp_stack
-
-            # Put board onto the stack
-            board_stack[board_idx] = board
-            continue
+                # Put board onto the stack
+                board_stack[board_idx] = board
 
 
 def fmt_invalid_board(invalid_board: np.ndarray):
@@ -284,9 +223,68 @@ def fmt_board_options(board: Board, collapsed_idx=None):
     return "".join(output)
 
 
-def main(initial_board: Optional[Board] = None, *, seed=None):
+def fmt_debug_board(board: Board, current_idx=None):
+    output: list[str | None] = [
+        "╔═══════╤═══════╤═══════╦═══════╤═══════╤═══════╦═══════╤═══════╤═══════╗\n║",
+        *[None] * 9 * 2,
+        "╟───────┼───────┼───────╫───────┼───────┼───────╫───────┼───────┼───────╢\n║",
+        *[None] * 9 * 2,
+        "╟───────┼───────┼───────╫───────┼───────┼───────╫───────┼───────┼───────╢\n║",
+        *[None] * 9 * 2,
+        "╠═══════╪═══════╪═══════╬═══════╪═══════╪═══════╬═══════╪═══════╪═══════╣\n║",
+        *[None] * 9 * 2,
+        "╟───────┼───────┼───────╫───────┼───────┼───────╫───────┼───────┼───────╢\n║",
+        *[None] * 9 * 2,
+        "╟───────┼───────┼───────╫───────┼───────┼───────╫───────┼───────┼───────╢\n║",
+        *[None] * 9 * 2,
+        "╠═══════╪═══════╪═══════╬═══════╪═══════╪═══════╬═══════╪═══════╪═══════╣\n║",
+        *[None] * 9 * 2,
+        "╟───────┼───────┼───────╫───────┼───────┼───────╫───────┼───────┼───────╢\n║",
+        *[None] * 9 * 2,
+        "╟───────┼───────┼───────╫───────┼───────┼───────╫───────┼───────┼───────╢\n║",
+        *[None] * 9 * 2,
+        "╚═══════╧═══════╧═══════╩═══════╧═══════╧═══════╩═══════╧═══════╧═══════╝",
+    ]
+
+    # Assumes the indices are in order...
+    for (idx,), cell in np.ndenumerate(board):
+        output_idx = (
+            1  # start
+            + idx % 9  # per column
+            + (idx // 9) * (18 + 1)  # per row
+        )
+        sep = "│" if idx % 3 != 2 else "║"
+        top = []
+        bottom = []
+        for (i,), v in np.ndenumerate(options):
+            arr = top if i < 5 else bottom
+            if v & cell:
+                if cell & COLLAPSED:
+                    arr += f"\033[42m{i}\033[0m"
+                else:
+                    arr += str(i)
+            else:
+                arr += " "
+
+        output[output_idx] = " {} {sep}{end}".format(
+            "".join(top),
+            sep=sep,
+            end="\n║" if idx % 9 == 8 else ""
+        )
+        output[output_idx + 9] = " {} {sep}{end}".format(
+            "".join(bottom),
+            sep=sep,
+            end="\n" if idx % 9 == 8 else "",
+        )
+
+    return "".join(output)
+
+
+def main(initial_board: Optional[Board] = None, *, seed=None, debug=False, quiet=False):
     t = time.perf_counter_ns()
-    result = solve(initial_board, seed=seed)
+    result = solve(initial_board, seed=seed, debug=debug, quiet=quiet)
+    if quiet:
+        return
     print("\033[2J")  # clear the screen
     t = time.perf_counter_ns() - t
     print(fmt_board(result.board))

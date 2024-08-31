@@ -5,7 +5,19 @@ from typing import Iterable
 import numpy as np
 
 from . import solver
-from .constraints import ConstraintABC, Default, Even, Options, Cage, Unique, COLLAPSED
+from .constraints import ConstraintABC, Default, Even, NumberOfZeros, Options, Cage, Unique, COLLAPSED
+
+blank_board_template = """\
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+"""
 
 board_template = """
     4   8   3   |   7   *   *   |   *   *   * 
@@ -18,26 +30,15 @@ board_template = """
     ------------------------------------------
     *   *   *   |   *   O   *   |   *   *   * 
     *   *   *   |   *   K   K   |   K   *   * 
-    *   *   *   |   *   K   K   |   K   *   * 
-"""
-board_template = """\
-* * * * * * * * *
-* * * * * * * * *
-* * * * * * * * *
-* * * * * * * * *
-* * * * * * * * *
-* * * * * * * * *
-* * * * * * * * *
-* * * * * * * * *
-* * * * * * * * *
+    *   *   *   |   *   K   K   |   K   *   3 
 """
 
 constraints_map = {
     **{str(i): Options(i) for i in range(10)},
-    "A": Default(), # Options(1,3,5),
-    "B": Default(), # Cage(total=8),
+    "A": Options(1,3,5),
+    "B": Cage(total=8),
     "e": Even(),
-    "O": Options(*range(1, 10)),
+    "O": NumberOfZeros(5),
     "*": Default(),
     "I": Unique(),
     "J": Unique(),

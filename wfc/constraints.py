@@ -288,3 +288,24 @@ class Cage(Unique):
 
         self.options = np.array([np.sum(options.take(x)) for x in combinations(v, num) if sum(x) == self.total], dtype=np.uint16)
         board[self._cell_indices] &= np.bitwise_or.reduce(self.options)
+
+
+class NumberOfZeros(ConstraintABC):
+    def __init__(self, total: int):
+        super().__init__()
+        self.total = total
+
+    def apply(self, board: Board):
+        for idx in self.cell_indices:
+            board[idx] &= options[self.total]
+        constraints_list.insert(-1, self.constraint)
+
+    def constraint(self, board: Board, _: CellIndex):
+        collapsed_zero_indices = np.flatnonzero(board == options[0] | COLLAPSED)
+        num_zeros = collapsed_zero_indices.size
+        if num_zeros > self.total:
+            raise BrokenConstraintsError
+        if num_zeros == self.total:
+            board[board < COLLAPSED] &= ~options[0]
+            if np.any(board & ~COLLAPSED == 0):
+                raise BrokenConstraintsError

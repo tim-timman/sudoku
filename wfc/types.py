@@ -5,6 +5,7 @@ import numpy.typing as npt
 
 
 options = np.array([1 << x for x in range(0, 10)], dtype=np.uint16)
+options_sum = np.sum(options)
 
 COLLAPSED = np.uint16(1 << 15)
 

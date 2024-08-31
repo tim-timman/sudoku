@@ -74,17 +74,18 @@ def solve(initial_board: Optional[Board] = None, *, seed=None, debug=False, quie
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TimeElapsedColumn(),
-            TextColumn("Iterations: {task.completed} | Backtracks: {task.fields[backtracks]} | Invalid Boards: {task.fields[invalid_boards]} | Prevented Recalculations: {task.fields[prevented_recalculations]}"),
+            TextColumn("Iterations: {task.completed} | Board idx: {task.fields[board_idx]} | Backtracks: {task.fields[backtracks]} | Invalid Boards: {task.fields[invalid_boards]} | Prevented Recalculations: {task.fields[prevented_recalculations]}"),
         )
     else:
         from unittest.mock import MagicMock
         p = MagicMock()
     with p as progress:
-        task = progress.add_task("Generating solution...", total=None, backtracks=num_backtracks, invalid_boards=invalid_boards_idx, prevented_recalculations=prevented_recalculations)
+        task = progress.add_task("Generating solution...", total=None, board_idx=board_idx, backtracks=num_backtracks, invalid_boards=invalid_boards_idx, prevented_recalculations=prevented_recalculations)
         while True:
             if board_idx < 0:
                 raise NoSolutions
-            progress.update(task, advance=1, backtracks=num_backtracks, invalid_boards=invalid_boards_idx, prevented_recalculations=prevented_recalculations)
+            progress.update(task, advance=1, board_idx=board_idx, backtracks=num_backtracks, invalid_boards=invalid_boards_idx, prevented_recalculations=prevented_recalculations)
+
             board[:] = board_stack[board_idx]
             if debug and not quiet:
                 print("\033[1;1H", fmt_debug_board(board), sep="")
@@ -101,7 +102,6 @@ def solve(initial_board: Optional[Board] = None, *, seed=None, debug=False, quie
             s = slice(0, invalid_boards_idx + 1)
             if invalid_boards_idx >= 0 and (invalid_boards[s] & current_board == invalid_boards[s]).all(axis=1).any():
                 board_idx -= 1
-                assert board_idx >= 0
                 prevented_recalculations += 1
                 continue
 
@@ -129,7 +129,6 @@ def solve(initial_board: Optional[Board] = None, *, seed=None, debug=False, quie
                     constraint(board, cell_idx)
                     if debug:
                         print("\033[1;1H", fmt_debug_board(board), sep="")
-
 
             except BrokenConstraintsError:
                 if debug:

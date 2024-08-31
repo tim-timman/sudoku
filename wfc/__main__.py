@@ -16,17 +16,28 @@ board_template = """
     e   *   e   |   *   *   *   |   *   *   * 
     *   e   *   |   B   B   B   |   *   *   * 
     ------------------------------------------
-    *   *   *   |   *   5   *   |   *   *   * 
+    *   *   *   |   *   O   *   |   *   *   * 
     *   *   *   |   *   K   K   |   K   *   * 
-    *   *   *   |   *   K   K   |   K   *   3 
+    *   *   *   |   *   K   K   |   K   *   * 
+"""
+board_template = """\
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
+* * * * * * * * *
 """
 
 constraints_map = {
     **{str(i): Options(i) for i in range(10)},
-    "A": Options(1,3,5),
-    "B": Cage(total=8),
+    "A": Default(), # Options(1,3,5),
+    "B": Default(), # Cage(total=8),
     "e": Even(),
-    # "O": Options(*range(1, 10)),
+    "O": Options(*range(1, 10)),
     "*": Default(),
     "I": Unique(),
     "J": Unique(),
@@ -65,19 +76,25 @@ def alarm(*_):
     raise Retry
 
 
-signal.signal(signal.SIGUSR1, lambda *_: breakpoint())
+def debug_break(*_):
+    signal.alarm(0)
+    breakpoint()
+
+
+signal.signal(signal.SIGUSR1, debug_break)
 signal.signal(signal.SIGALRM, alarm)
 
 board = parse_board(board_template)
 
 
 def solve():
-    solver.main(board, seed=333994325917206120681495443532316063120, quiet=True)
+    solver.main(board, seed=280621989317548924564065553761856945658) #, quiet=True)
 
 
 while True:
-    signal.alarm(2)
+    signal.alarm(10)
     try:
+        # solve()
         solver.main(board)
     except Retry:
         print("restarting search...")

@@ -1,4 +1,5 @@
 import itertools
+import signal
 from abc import ABC, abstractmethod
 from itertools import chain, combinations
 from typing import override, Optional
@@ -31,9 +32,10 @@ standard_constraints = np.array([
     *chain.from_iterable(index_board.reshape((27, 3))[i::3].reshape((3, 9)) for i in range(3))
 ])
 
-use_column_with_zero_equals_box_constraint = True
+use_column_with_zero_equals_box_constraint = False
 use_row_with_zero_equals_box_constraint = False
 use_zero_indexing_constraint = False
+use_digit_missing_from_zero_row_gives_row_containing_zero = True
 
 
 def apply_standard_constraints(board: Board, idx: CellIndex):
@@ -56,11 +58,12 @@ def apply_zero_constraints(board: Board, _: CellIndex):
 
     collapsed_zero_indices = np.flatnonzero(board == options[0] | COLLAPSED)
 
-    # # At most 5 zeros!
-    # if collapsed_zero_indices.size == 5:
-    #     board[board < COLLAPSED] &= ~options[0]
-    #     if np.any(board & ~COLLAPSED == 0):
-    #         raise BrokenConstraintsError
+    # At most X zeros!
+    max_zeros = 1
+    if collapsed_zero_indices.size == max_zeros:
+        board[board < COLLAPSED] &= ~options[0]
+        if np.any(board & ~COLLAPSED == 0):
+            raise BrokenConstraintsError
 
     for cell_idx in collapsed_zero_indices:
         row, col, box = constraints = standard_constraints[np.isin(standard_constraints, cell_idx).any(axis=1)]
@@ -94,6 +97,71 @@ def apply_zero_constraints(board: Board, _: CellIndex):
             and np.any(board[constraints] & ~COLLAPSED == 0)
         ):
             raise BrokenConstraintsError
+
+        if use_digit_missing_from_zero_row_gives_row_containing_zero:
+            # If a row contains a zero, that means a non-zero digits is missing from that row.
+            # That missing digit (X) communicates that the row X contains a zero.
+            #
+            # All zero containing rows must be referenced this way, they may be self-referential.
+            # import sys
+            # f = sys._getframe(1)
+            # if cell_idx == 7:
+            #     pass
+            # print(f.f_globals["fmt_board_options"](board))
+            # task = f.f_locals["progress"].tasks[0]
+            # del f
+
+            ma_non_collapsed = ma.masked_greater(board[row], COLLAPSED, copy=False)
+            # Aggregate the potentially missing digits
+            missing_digit_row_options = ma.bitwise_or.reduce(ma_non_collapsed) or (~np.bitwise_or.reduce(board[row]) & options_sum)
+            # Get the row indices that may contain a zero
+            row_numbers = tuple(map(int, np.log2(options[options & missing_digit_row_options > 0])))
+
+            if len(row_numbers) >= 1:
+                # Any indexed row that can no longer contain a zero, is no longer an option.
+                must_be_present = []
+                for row_number in row_numbers:
+                    indexed_row = standard_constraints[row_number - 1]
+                    if not np.bitwise_or.reduce(board[indexed_row]) & options[0]:
+                        # 0 no longer an option in row
+                        must_be_present.append(row_number)
+                if len(must_be_present) == len(row_numbers):
+                    # All options must be present, make sure they are
+                    total = np.bitwise_or.reduce(options[must_be_present])
+                    if not np.bitwise_or.reduce(board[row]) & total == total:
+                        raise BrokenConstraintsError
+                for row_number in must_be_present:
+                    # Make sure the option is present
+                    ma_row_number_cells = ma.masked_greater_equal(board[row] & (options[row_number] | COLLAPSED), COLLAPSED, copy=False)
+                    if ma_row_number_cells.count() == 0:
+                        raise BrokenConstraintsError
+                    if ma_row_number_cells.count() == 1:
+                        # only one option for the must be present digit, force it.
+                        ma_row_number_cells &= options[row_number]
+
+                if np.any(board[row] & ~COLLAPSED == 0):
+                    raise BrokenConstraintsError
+                # Update the remaining row number in case there's only one remaining
+                row_numbers = tuple(set(row_numbers).difference(must_be_present))
+
+            self_row_number = cell_idx // 9 + 1
+            if len(row_numbers) == 1:
+                row_number = row_numbers[0]
+                # The indexed row is now forced to contain a zero
+                # Check to see if we can force the 0 cell
+                indexed_row = standard_constraints[row_number - 1]
+                # Remove the forced "missing" option from the source row
+                board[row] &= (~options[row_number]) | COLLAPSED
+
+                if not np.any(board[indexed_row] == (options[0] | COLLAPSED)):
+                    ma_zero_alternatives = ma.masked_greater_equal(board[indexed_row] & (options[0] | COLLAPSED), COLLAPSED, copy=False)
+                    # If only _one_ cell has 0 as the alternative, then force it.
+                    if ma_zero_alternatives.count() == 1:
+                        ma_zero_alternatives &= options[0] | COLLAPSED
+                if np.any((board[indexed_row] & ~COLLAPSED) == 0):
+                    raise BrokenConstraintsError
+
+
 
         if use_zero_indexing_constraint:
             # Zero indexing rule:
@@ -169,7 +237,10 @@ def assert_board_validity(board: Board):
         assert np.all(np.unique(board[constraint], return_counts=True)[1] == 1)
 
     # Zero constraint
-    for cell_idx in np.flatnonzero(board == options[0] | COLLAPSED):
+    rows_with_zero = set()
+    rows_pointed_to = set()
+    zero_indices = np.flatnonzero(board == options[0] | COLLAPSED)
+    for cell_idx in zero_indices:
         row, col, box = standard_constraints[np.isin(standard_constraints, cell_idx).any(axis=1)]
         if use_column_with_zero_equals_box_constraint:
             assert np.intersect1d(board[col], board[box]).shape[0] == col.shape[0]
@@ -177,6 +248,15 @@ def assert_board_validity(board: Board):
             assert np.intersect1d(board[row], board[box]).shape[0] == row.shape[0]
         if use_zero_indexing_constraint:
             raise NotImplementedError()
+        if use_digit_missing_from_zero_row_gives_row_containing_zero:
+            row_number = int(cell_idx // 9 + 1)
+            rows_with_zero.add(row_number)
+            missing_option = np.log2(options[options & ~np.bitwise_or.reduce(board[row]) > 0])
+            rows_pointed_to.add(int(missing_option))
+
+    if use_digit_missing_from_zero_row_gives_row_containing_zero:
+        assert rows_with_zero == rows_pointed_to, f"{rows_with_zero} != {rows_pointed_to}"
+        assert zero_indices.size == len(rows_with_zero)
 
     # @TODO: extra constraints...
 

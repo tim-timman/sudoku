@@ -201,7 +201,7 @@ def fmt_board_options(board: Board, collapsed_idx=None):
     output: list[str] = []
     for (idx, ), cell in np.ndenumerate(board):
         if idx % 27 == 0:
-            output += "—" * 31, "\n"
+            output += "—" * 112, "\n"
 
         if idx % 9 == 0:
             output += "|"
@@ -218,7 +218,7 @@ def fmt_board_options(board: Board, collapsed_idx=None):
         if idx % 9 == 8:
             output += "\n"
 
-    output += "—" * 31
+    output += "—" * 112
     return "".join(output)
 
 

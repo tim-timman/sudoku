@@ -33,16 +33,26 @@ board_template = """
     *   *   *   |   *   K   K   |   K   *   3 
 """
 
+board_template = """
+    4   8   3   |   7   *   *   |   *   *   * 
+    *   *   1   |   *   *   *   |   *   *   * 
+    *   6   *   |   *   *   *   |   *   *   * 
+    ------------------------------------------
+    2   9   0   |   5   A   A   |   e   *   e
+    e   *   e   |   *   *   *   |   *   *   * 
+    *   e   *   |   B   B   B   |   *   *   * 
+    ------------------------------------------
+    *   *   *   |   *   *   *   |   *   *   * 
+    *   *   *   |   *   *   *   |   *   *   * 
+    *   *   *   |   *   *   *   |   *   *   * 
+"""
+board_template = blank_board_template
 constraints_map = {
     **{str(i): Options(i) for i in range(10)},
-    "A": Options(1,3,5),
+    "A": Options(1,3),
     "B": Cage(total=8),
     "e": Even(),
-    "O": NumberOfZeros(5),
     "*": Default(),
-    "I": Unique(),
-    "J": Unique(),
-    "K": Unique(),
 }
 
 
@@ -89,7 +99,8 @@ board = parse_board(board_template)
 
 
 def solve():
-    solver.main(board, seed=280621989317548924564065553761856945658) #, quiet=True)
+    solver.main(board, seed=35354952237464344499561046517502448174) #, quiet=True)
+    solver.main(board, seed=32044001236707542926087009531794486745) #, quiet=True)
 
 
 while True:

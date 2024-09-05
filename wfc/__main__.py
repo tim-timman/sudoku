@@ -5,6 +5,7 @@ from typing import Iterable
 import numpy as np
 
 from . import solver
+from .types import NoSolutions
 from .constraints import ConstraintABC, Default, Even, MustContainUnique, NumberOfZeros, Options, Cage, Unique, COLLAPSED
 
 blank_board_template = """\
@@ -34,31 +35,30 @@ board_template = """
 """
 
 board_template = """
-    4   8   3   |   7   *   *   |   *   *   * 
-    *   *   1   |   9u  5u  8u  |   2u  6u  * 
-    *   6   *   |   0u  4u  3u  |   7u  1u  * 
+    4   8   3   |   7   *   *   |   *   *   *
+    *   *   1   |   9   5   8   |   2   6   * 
+    *   6   *   |   0   4   3   |   7   1   * 
     ------------------------------------------
-    2   9   0   |   5   A   A   |   e   *   e
-    e   *   e   |   *   *   *   |   *   *   * 
-    *   e   *   |   B   B   B   |   *   *   * 
+    2   9   0   |   5   3   1   |   e   *   e
+    e   *   e   |   4   *   *   |   *   *   * 
+    *   4   *   |   *   0   *   |   *   *   *
     ------------------------------------------
-    *   *   *   |   a   z   *   |   *   *   * 
-    *   *   *   |   8   z   y   |   y   *   * 
-    *   *   *   |   a   *   y   |   y   x   x 
+    *   *   b   |   *   *   *   |   *   *   * 
+    *   *   b   |   z   z   *   |   *   *   * 
+    3   0   b   |   z   z   y   |   y   y   *
 """
 # board_template = blank_board_template
 constraints_map = {
     **{str(i): Options(i) for i in range(10)},
-    "A": Options(1, 3),
-    "B": Cage(total=8),
     "O": NumberOfZeros(5),
-    "u": Unique(),
-    "x": Cage(total=9),
-    "y": Cage(total=18),
-    "z": Options(2,6),
-    "a": Options(1, 3),
+    "b": Default(), # Options(2, 4, 6),
+    "d": Options(3,4),
+    "y": Default(), # Cage(total=12),
+    "z": Default(), #Cage(total=24),
     "e": Even(),
     "*": Default(),
+    "c": MustContainUnique(3),
+    "g": MustContainUnique(0),
 }
 
 
@@ -103,13 +103,21 @@ signal.signal(signal.SIGALRM, alarm)
 
 board = parse_board(board_template)
 
+i = 0
 while True:
     signal.alarm(10)
     try:
         # @FIXME: Something's bugged with "regular" constraints see seed=5595725474079879758229220073552776793
-        #  Probably the Cage constraint...
+        #  Probably the Cage constraint... nope, buggy even without Cage constraints, maybe not that seed though.
         solver.main(board) #, debug=True)
     except Retry:
         print("restarting search...")
         continue
+    except (NoSolutions, AssertionError):
+        # Workaround the bugs... just try a couple of extra times (because there probably are solutions) :P
+        #  reset the invalid boards on "NoSolutions" because they may be invalid :sweat-smile:
+        solver.invalid_boards_idx = -1
+        i += 1
+        if i <= 25:
+            continue
     break

@@ -59,7 +59,7 @@ def apply_zero_constraints(board: Board, _: CellIndex):
     collapsed_zero_indices = np.flatnonzero(board == options[0] | COLLAPSED)
 
     # At most X zeros!
-    max_zeros = 5
+    max_zeros = 6
     if collapsed_zero_indices.size == max_zeros:
         board[board < COLLAPSED] &= ~options[0]
         if np.any(board & ~COLLAPSED == 0):

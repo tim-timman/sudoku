@@ -287,6 +287,8 @@ def main(initial_board: Optional[Board] = None, *, seed=None, debug=False, quiet
     print("\033[2J")  # clear the screen
     t = time.perf_counter_ns() - t
     print(fmt_board(result.board))
+
+    print(f"Missing sum: {int((45*9) - np.sum(np.log2(result.board - COLLAPSED)))}")
     print(f"Took {t/1e6:.3f} ms with {result.num_backtracks} backtracks")
 
 
